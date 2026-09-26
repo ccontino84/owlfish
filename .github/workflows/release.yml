@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: 2026 ccontino84
+# SPDX-License-Identifier: LGPL-2.1-only
+#
+# Run by hand (Actions > Release > Run workflow) after setting the new Version
+# in rpm/owlfish.spec: runs the tests, builds the RPMs and creates the GitHub
+# release v<Version> with them attached.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft:
+        description: Create the release as a draft, to review before publishing
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  # Sailfish SDK target the RPMs are built against; Qt 5.6.3 like 5.2.x
+  SFOS_RELEASE: 5.1.0.11
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.spec.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: spec
+        run: |
+          version=$(sed -n 's/^Version:[[:space:]]*//p' rpm/owlfish.spec)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "::error::v$version already exists; raise Version in rpm/owlfish.spec"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qtbase5-dev qtbase5-dev-tools qt5-qmake qtdeclarative5-dev libqt5sensors5-dev \
+            qml-module-qtquick2 libgl1-mesa-dri xvfb xauth
+      - name: Build
+        run: |
+          mkdir build
+          cd build
+          /usr/lib/qt5/bin/qmake ../owlfish.pro
+          make -j"$(nproc)"
+      - name: Test
+        run: |
+          cd build
+          QT_QPA_PLATFORM=xcb QSG_RENDER_LOOP=basic \
+            xvfb-run -a -s "-screen 0 640x480x24" ./tests/tst_owlfish
+
+  build:
+    needs: [version, test]
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        arch: [aarch64, armv7hl]
+    steps:
+      - uses: actions/checkout@v4
+      - run: ci/build-rpm.sh ${{ matrix.arch }} "$SFOS_RELEASE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-${{ matrix.arch }}
+          path: out/*.rpm
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: rpms
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DRAFT: ${{ inputs.draft && '--draft' || '' }}
+        run: |
+          gh release create "v$VERSION" rpms/*.rpm $DRAFT \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Owlfish $VERSION" --generate-notes

@@ -1,0 +1,15 @@
+# sfdk builds in the source tree
+/RPMS/
+/.sfdk/
+/documentation.list
+Makefile
+*.o
+moc_*
+*.moc
+/plugins/
+/tests/tst_owlfish
+/src/libowlfish.so*
+
+# host builds
+/build/
+/out/

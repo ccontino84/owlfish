@@ -1,0 +1,26 @@
+{
+    "entries": [
+        {
+            "path": "system_settings/look_and_feel/owlfish",
+            "title": "Owlfish",
+            "type": "page",
+            "icon": "image://theme/icon-m-owlfish",
+            "order": 210,
+            "params": {
+                "source": "/usr/share/jolla-settings/pages/owlfish/OwlfishPage.qml",
+                "allow_favorite": false
+            }
+        },
+        {
+            "path": "system_settings/look_and_feel/owlfish/enable_switch",
+            "title": "Owlfish",
+            "type": "custom",
+            "icon": "image://theme/icon-m-owlfish",
+            "params": {
+                "source": "/usr/share/jolla-settings/pages/owlfish/EnableSwitch.qml",
+                "type": "grid",
+                "settings_path": "system_settings/look_and_feel/owlfish"
+            }
+        }
+    ]
+}

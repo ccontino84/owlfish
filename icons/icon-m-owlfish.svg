@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- SPDX-FileCopyrightText: 2026 ccontino84
+       SPDX-License-Identifier: LGPL-2.1-only -->
+  <!-- Owlfish: a sleepy owl with half-lowered (dimmed) eyelids. Monochrome
+       white like the Silica icons-monochrome set (secondary parts at 60 %
+       opacity), so the theme can recolour it. Render with ./render.sh after
+       editing. -->
+  <path d="M14 9 L22 17 Q32 13 42 17 L50 9 L50 39 Q50 58 32 58 Q14 58 14 39 Z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <defs>
+    <clipPath id="lidL"><circle cx="24" cy="31" r="7"/></clipPath>
+    <clipPath id="lidR"><circle cx="40" cy="31" r="7"/></clipPath>
+  </defs>
+  <circle cx="24" cy="31" r="7" fill="none" stroke="#fff" stroke-width="2"/>
+  <circle cx="40" cy="31" r="7" fill="none" stroke="#fff" stroke-width="2"/>
+  <circle cx="24" cy="33" r="2.5" fill="#fff"/>
+  <circle cx="40" cy="33" r="2.5" fill="#fff"/>
+  <rect x="16" y="23" width="16" height="8" fill="#fff" fill-opacity="0.6" clip-path="url(#lidL)"/>
+  <rect x="32" y="23" width="16" height="8" fill="#fff" fill-opacity="0.6" clip-path="url(#lidR)"/>
+  <path d="M29.5 40 L32 45 L34.5 40 Z" fill="#fff" fill-opacity="0.6"/>
+  <path d="M14 39 Q20 47 20 55" fill="none" stroke="#fff" stroke-opacity="0.6" stroke-width="2" stroke-linecap="round"/>
+  <path d="M50 39 Q44 47 44 55" fill="none" stroke="#fff" stroke-opacity="0.6" stroke-width="2" stroke-linecap="round"/>
+</svg>

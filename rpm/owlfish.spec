@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 ccontino84
+# SPDX-License-Identifier: LGPL-2.1-only
+
+Name:       owlfish
+Version:    1.0.0
+Release:    1
+Summary:    Warm tint and extra dimming for the display
+License:    LGPL-2.1-only
+URL:        https://github.com/ccontino84/owlfish
+Source0:    %{name}-%{version}.tar.bz2
+BuildRequires:  pkgconfig(Qt5Core)
+BuildRequires:  pkgconfig(Qt5DBus)
+BuildRequires:  pkgconfig(Qt5Gui)
+BuildRequires:  pkgconfig(Qt5Quick)
+BuildRequires:  pkgconfig(Qt5Sensors)
+BuildRequires:  pkgconfig(mlite5)
+Requires:   lipstick-qt5
+Requires:   qt5-qtsensors-plugin-sensorfw
+# Settings page
+Requires:   jolla-settings
+Requires:   nemo-qml-plugin-configuration-qt5
+Requires:   qt5-qtdeclarative-import-sensors
+
+%description
+Adds a colour filter on top of the home screen compositor (lipstick) that
+tints the display warmer and can dim it further than the backlight can.
+Loaded into lipstick as a Qt generic plugin; no system files are modified.
+
+Controlled from Settings > Owlfish and a top menu shortcut, or dconf
+under /apps/owlfish/ (see README.md).
+
+%prep
+%autosetup -n %{name}-%{version}
+
+%build
+%qmake5 CONFIG+=notests
+make %{?_smp_mflags}
+
+%install
+%qmake5_install
+
+%post
+echo "owlfish: restart the home screen to load it: systemctl --user restart lipstick"
+
+%postun
+if [ $1 -eq 0 ]; then
+    echo "owlfish: restart the home screen to unload it: systemctl --user restart lipstick"
+fi
+
+%files
+%license LICENSE
+%{_libdir}/qt5/plugins/generic/libowlfish.so
+%{_sharedstatedir}/environment/compositor/90-owlfish.conf
+%{_datadir}/jolla-settings/entries/owlfish.json
+%{_datadir}/jolla-settings/pages/owlfish
+%{_datadir}/themes/sailfish-default/silica/*/icons-monochrome/icon-m-owlfish.png
