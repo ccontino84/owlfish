@@ -27,7 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.spec.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: spec
         run: |
           version=$(sed -n 's/^Version:[[:space:]]*//p' rpm/owlfish.spec)
@@ -40,7 +40,7 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Qt 5
         run: |
           sudo apt-get update
@@ -66,9 +66,9 @@ jobs:
       matrix:
         arch: [aarch64, armv7hl]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: ci/build-rpm.sh ${{ matrix.arch }} "$SFOS_RELEASE"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rpm-${{ matrix.arch }}
           path: out/*.rpm
@@ -78,7 +78,7 @@ jobs:
     needs: [version, build]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: rpms
           merge-multiple: true
