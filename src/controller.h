@@ -7,6 +7,8 @@
 #include "colorfilteritem.h"
 #include "crashguard.h"
 #include "schedule.h"
+#include "sun.h"
+#include "timezonelocation.h"
 
 #include <QObject>
 #include <QPointer>
@@ -22,7 +24,8 @@ class OwlfishSettings;
 // Runs inside the compositor process: waits for the compositor's QQuickWindow,
 // puts a ColorFilterItem on top of its scene and drives it from the settings.
 // The schedule only affects the colour, the ambient light cut-off only the
-// dimming.
+// dimming. With a sunset to sunrise schedule it also publishes today's sun
+// times for the settings page.
 class OwlfishController : public QObject
 {
     Q_OBJECT
@@ -35,6 +38,7 @@ public:
     bool isActive() const { return m_active; }
     ColorFilterItem *filterItem() const { return m_item; }
     AmbientCutoff *cutoff() const { return m_cutoff; }
+    OwlfishSettings *settings() const { return m_settings; }
 
     // Warm tint, colourStrength of the way from neutral to the temperature,
     // times the dimming
@@ -56,6 +60,9 @@ private:
     void attach(QQuickWindow *window);
     void updateLightSensor();
     OwlfishSchedule schedule() const;
+    qreal currentColourStrength(const QDateTime &now) const;
+    void updateSun();
+    void publishSun();
     void updateScheduleTimer();
     void updateGain(int fadeMs);
     void fadeTo(const QVector3D &gain, int durationMs);
@@ -77,6 +84,19 @@ private:
     QVariantAnimation m_animation;
     QVector3D m_fromGain;
     QVector3D m_toGain;
+    // The time zone's city, looked up again when the zone changes
+    TimeZoneLocation m_zoneLocation;
+    // Today's sun times, for the date, zone and location they were
+    // calculated for
+    QDate m_sunDate;
+    QString m_sunZone;
+    bool m_sunLocated;
+    double m_sunLatitude;
+    double m_sunLongitude;
+    SunTimes::State m_sunState;
+    // Minutes after local midnight
+    int m_sunset;
+    int m_sunrise;
 };
 
 #endif

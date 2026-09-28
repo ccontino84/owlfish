@@ -20,16 +20,35 @@ Page {
         property bool enabled: false
         property int temperature: 4500
         property bool schedule: false
+        // Sunset to sunrise instead of the fixed times
+        property bool schedule_sun: false
         // Minutes after midnight
         property int schedule_from: 1260
         property int schedule_to: 420
         property int schedule_transition: 60
+        // Typed coordinates instead of the time zone's city; out of range
+        // until set
+        property bool location_manual: false
+        property real latitude: 1000
+        property real longitude: 1000
         property int dim: 0
         property bool dim_cutoff: true
         property int dim_cutoff_lux: 1000
         // Written by the plugin from mce's AlsValueMultiplier, so that the
         // light reading below is in the same units as the threshold
         property real als_multiplier: 1.0
+        // Written by the plugin, which reads the time zone: its city (empty
+        // if it has none) and that city's coordinates
+        property string sun_place: ""
+        property real auto_latitude: 1000
+        property real auto_longitude: 1000
+        // Today's sun for the location in use: "normal", "polar_day",
+        // "polar_night" or "no_location"; empty until the plugin has run.
+        // The times are minutes after midnight.
+        property string sun_state: ""
+        property int sun_set: -1
+        property int sun_rise: -1
+        property real sun_latitude: 0
     }
 
     // ColorTemperature::Neutral and Minimum: from no tint to no blue left
@@ -45,6 +64,14 @@ Page {
     readonly property var luxSteps: [100, 150, 200, 300, 500, 700,
                                      1000, 1500, 2000, 3000, 5000, 7000,
                                      10000, 15000, 20000, 30000, 50000]
+
+    // Index of the "When" choices: all the time, fixed times, sunset to sunrise
+    readonly property int whenIndex: !config.schedule ? 0 : (config.schedule_sun ? 2 : 1)
+    readonly property bool sunSchedule: whenIndex === 2
+    readonly property bool hasAutoLocation: config.sun_place !== ""
+    readonly property bool hasManualLocation: validCoordinates(config.latitude, config.longitude)
+    // The same choice the plugin makes
+    readonly property bool usesManualLocation: config.location_manual && hasManualLocation
 
     readonly property bool dimming: config.dim > 0
     readonly property bool cutoffApplies: dimming && config.dim_cutoff
@@ -82,14 +109,120 @@ Page {
     function scheduleStatus() {
         if (!config.schedule)
             return "Warm whenever Owlfish is enabled."
+        var from = config.schedule_from
+        var to = config.schedule_to
+        if (config.schedule_sun) {
+            if (config.sun_state === "polar_day")
+                return "Neutral all day today."
+            if (config.sun_state === "polar_night")
+                return "Warm all day today."
+            if (config.sun_state !== "normal")
+                return "Neutral until sunset and sunrise are known."
+            from = config.sun_set
+            to = config.sun_rise
+        }
         var day = 24 * 60
-        var length = (config.schedule_to - config.schedule_from + day) % day
+        var length = (to - from + day) % day
         if (length === 0)
             return "The start and end are the same, so the colour stays neutral."
-        var into = (nowMinutes - config.schedule_from + day) % day
+        var into = (nowMinutes - from + day) % day
         if (into < length)
-            return "Warm now; neutral from " + formatMinutes(config.schedule_to) + "."
-        return "Neutral now; warms up from " + formatMinutes(config.schedule_from) + "."
+            return "Warm now; neutral from " + formatMinutes(to) + "."
+        return "Neutral now; warms up from " + formatMinutes(from) + "."
+    }
+
+    function formatDuration(minutes) {
+        var hours = Math.floor(minutes / 60)
+        if (hours === 0)
+            return minutes + " min"
+        return minutes % 60 === 0 ? hours + " h" : hours + " h " + (minutes % 60) + " min"
+    }
+
+    // Today's sunset and sunrise, as the plugin calculated them
+    function sunStatus() {
+        switch (config.sun_state) {
+        case "":
+            return "Sunset and sunrise appear once Owlfish is running."
+        case "no_location":
+            return "Your time zone has no location. Set it manually below."
+        case "polar_day":
+            return "The sun doesn't set today, so the colour stays neutral."
+        case "polar_night":
+            return "The sun doesn't rise today, so the colour stays warm all day."
+        }
+
+        var where = page.usesManualLocation
+                ? formatCoordinates(config.latitude, config.longitude)
+                : config.sun_place + ", from your time zone"
+        var text = "Today: sunset " + formatMinutes(config.sun_set) + ", sunrise "
+                + formatMinutes(config.sun_rise) + " (" + where + ")."
+
+        // OwlfishSchedule shortens the transitions to fit
+        var night = (config.sun_rise - config.sun_set + 24 * 60) % (24 * 60)
+        if (config.schedule_transition > 0 && night < 2 * config.schedule_transition)
+            text += " Tonight is only " + formatDuration(night) + " long; the change is quicker to fit."
+
+        // Near the polar circles the sun crosses the horizon at a shallow
+        // angle, so small errors move the times a lot
+        if (Math.abs(config.sun_latitude) >= 60) {
+            text += " This far " + (config.sun_latitude > 0 ? "north" : "south")
+                    + " the times are approximate: sunset and sunrise can shift by several minutes"
+                    + (page.usesManualLocation ? "" : ", and the time zone's city may be far from you")
+                    + ". Fixed times give a steadier routine."
+        }
+        return text
+    }
+
+    function validCoordinates(latitude, longitude) {
+        return Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180
+    }
+
+    function formatCoordinates(latitude, longitude) {
+        return latitude.toFixed(2) + ", " + longitude.toFixed(2)
+    }
+
+    // As map apps and websites copy them ("60.1699, 24.9384"), also with
+    // decimal commas, degree signs, or N/S/E/W instead of signs. Returns
+    // [latitude, longitude] rounded to 2 decimals (about 1 km), or null.
+    function parseCoordinates(text) {
+        var number = "([+\\-\u2212]?)(\\d+(?:[.,]\\d+)?)\\s*°?\\s*([NSEWnsew]?)"
+        var match = new RegExp("^\\s*" + number + "(?:\\s*[,;]\\s*|\\s+)" + number + "\\s*$").exec(text)
+        if (!match)
+            return null
+
+        function angle(sign, digits, hemisphere, positive, negative) {
+            hemisphere = hemisphere.toUpperCase()
+            if (hemisphere !== "" && hemisphere !== positive && hemisphere !== negative)
+                return NaN
+            var value = parseFloat(digits.replace(",", "."))
+            if (sign !== "" && sign !== "+")
+                value = -value
+            if (hemisphere === negative)
+                value = -value
+            return Math.round(value * 100) / 100
+        }
+        var latitude = angle(match[1], match[2], match[3], "N", "S")
+        var longitude = angle(match[4], match[5], match[6], "E", "W")
+        return validCoordinates(latitude, longitude) ? [latitude, longitude] : null
+    }
+
+    function setLocationManual(manual) {
+        // The first time, start from the time zone's coordinates; afterwards
+        // from the last ones typed, which are kept while switched off
+        if (manual && !page.hasManualLocation && page.hasAutoLocation) {
+            config.latitude = Math.round(config.auto_latitude * 100) / 100
+            config.longitude = Math.round(config.auto_longitude * 100) / 100
+        }
+        config.location_manual = manual
+    }
+
+    function saveCoordinates() {
+        var coordinates = parseCoordinates(coordinatesField.text)
+        if (!coordinates)
+            return
+        config.latitude = coordinates[0]
+        config.longitude = coordinates[1]
+        coordinatesField.text = coordinatesField.savedText
     }
 
     function luxStepIndex(lux) {
@@ -210,16 +343,35 @@ Page {
                 }
             }
 
-            TextSwitch {
-                text: "Only at night"
-                description: "Warm only between the start and end times below; neutral the rest of the day."
-                checked: config.schedule
-                automaticCheck: false
-                onClicked: config.schedule = !checked
+            ComboBox {
+                label: "When"
+                currentIndex: page.whenIndex
+
+                menu: ContextMenu {
+                    // Same order as page.whenIndex
+                    MenuItem {
+                        text: "All the time"
+                        onClicked: config.schedule = false
+                    }
+                    MenuItem {
+                        text: "Fixed times"
+                        onClicked: {
+                            config.schedule_sun = false
+                            config.schedule = true
+                        }
+                    }
+                    MenuItem {
+                        text: "Sunset to sunrise"
+                        onClicked: {
+                            config.schedule_sun = true
+                            config.schedule = true
+                        }
+                    }
+                }
             }
 
             ValueButton {
-                enabled: config.schedule
+                enabled: page.whenIndex === 1
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 label: "Start"
                 value: page.formatMinutes(config.schedule_from)
@@ -227,18 +379,80 @@ Page {
             }
 
             ValueButton {
-                enabled: config.schedule
+                enabled: page.whenIndex === 1
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 label: "End"
                 value: page.formatMinutes(config.schedule_to)
                 onClicked: page.pickTime("schedule_to")
             }
 
+            Label {
+                opacity: page.sunSchedule ? 1.0 : Theme.opacityLow
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * Theme.horizontalPageMargin
+                wrapMode: Text.Wrap
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.secondaryHighlightColor
+                text: page.sunStatus()
+            }
+
+            // Silica has no checkbox; the switch sits above the field
+            // because both do not fit on one row
+            TextSwitch {
+                enabled: page.sunSchedule
+                text: "Set location manually"
+                description: "For sunset to sunrise: your own coordinates instead of your time zone's city."
+                checked: config.location_manual
+                automaticCheck: false
+                onClicked: page.setLocationManual(!checked)
+            }
+
+            TextField {
+                id: coordinatesField
+
+                // What is stored, as shown when not editing
+                readonly property string savedText: page.usesManualLocation
+                        ? page.formatCoordinates(config.latitude, config.longitude)
+                        : (!config.location_manual && page.hasAutoLocation
+                           ? page.formatCoordinates(config.auto_latitude, config.auto_longitude) : "")
+                readonly property bool editable: page.sunSchedule && config.location_manual
+                readonly property bool valid: page.parseCoordinates(text) !== null
+
+                width: parent.width
+                // Greyed out and read-only unless set manually
+                enabled: editable
+                label: "Coordinates"
+                placeholderText: "Latitude, longitude"
+                inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
+                errorHighlight: editable && text !== "" && !valid
+                description: {
+                    if (errorHighlight)
+                        return "Not valid coordinates"
+                    if (config.location_manual)
+                        return "Copy them from a map app or website. They stay on this device."
+                    return page.hasAutoLocation ? "From your time zone (" + config.sun_place + ")."
+                                                : "Your time zone has no location."
+                }
+
+                onSavedTextChanged: {
+                    if (!activeFocus)
+                        text = savedText
+                }
+                Component.onCompleted: text = savedText
+                onActiveFocusChanged: {
+                    if (!activeFocus)
+                        page.saveCoordinates()
+                }
+
+                EnterKey.iconSource: "image://theme/icon-m-enter-close"
+                EnterKey.onClicked: focus = false
+            }
+
             ComboBox {
                 enabled: config.schedule
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 label: "Gradual change"
-                description: "Warms up gradually from the start time, and is back to neutral at the end time."
+                description: "Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise."
                 currentIndex: Math.max(0, page.transitionSteps.indexOf(config.schedule_transition))
 
                 menu: ContextMenu {

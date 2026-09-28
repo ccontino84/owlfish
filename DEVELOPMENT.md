@@ -41,6 +41,8 @@ Source layout (`src/`):
 | `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and the multiply-blend material |
 | `colortemperature.*` | kelvin → per-channel gain |
 | `schedule.*` | the daily window and its transitions |
+| `sun.*` | sunset and sunrise (NOAA's solar equations) |
+| `timezonelocation.*` | the system time zone and its city's coordinates from tzdata |
 | `ambientcutoff.*`, `alscalibration.*` | bright-light hysteresis and debounce; mce's `AlsValueMultiplier` |
 | `settings.*` | dconf keys (mlite `MDConfItem`); environment variables in host builds |
 | `crashguard.*` | the unhealthy-start counter |
@@ -68,6 +70,42 @@ While Owlfish is enabled with a schedule, the plugin updates the colour every
 30 s while the display is on, and at once when it turns on (mce
 `display_status_ind` on the system bus).
 
+### Sunset to sunrise
+
+`SunTimes` is our own implementation of NOAA's public-domain solar
+equations (declination and equation of time, as in NOAA's solar calculator
+spreadsheet), refined at each event's own time, with the sun's centre 0.833°
+below the horizon. NOAA gives the accuracy as about 1 min between ±72°
+latitude and 10 min beyond. The tests compare it with the US Naval
+Observatory's values (normal days, DST changes, the southern hemisphere,
+sunsets after midnight, and the first days of midnight sun and polar
+night).
+
+The window is today's sunset to today's sunrise, in local minutes, fed into
+the same `OwlfishSchedule` as fixed times: the sunrise moves by minutes a
+day, so today's stands in for tomorrow's. Under the midnight sun the window
+is empty (neutral); in polar night the colour is on all day.
+
+The location is the time zone's reference city unless `location_manual` is
+set with valid coordinates:
+
+- **Zone:** `/etc/localtime` is followed one link at a time
+  (`/etc/localtime` → `/var/lib/timed/localtime` →
+  `/usr/share/zoneinfo/Europe/Berlin` on Sailfish OS), stopping at the first
+  target inside a `zoneinfo/` directory. Resolving the whole chain would be
+  wrong where tzdata installs aliases as symlinks (Europe/Oslo →
+  Europe/Berlin). Qt 5.6's `QTimeZone::systemTimeZoneId()` follows only one
+  link, so it is only the fallback.
+- **Coordinates:** `zone.tab` first (one line per country, e.g.
+  Europe/Oslo), then `zone1970.tab`, whose lines merge countries. No API
+  provides a time zone's coordinates.
+
+The plugin re-reads the links on every schedule tick and recalculates when
+the date, zone or location changes. It publishes the result under
+`/apps/owlfish/` (`sun_place`, `auto_latitude`, `auto_longitude`,
+`sun_state`, `sun_set`, `sun_rise`, `sun_latitude`), so the settings page
+reads no files.
+
 ### Light sensor
 
 `QLightSensor`, event driven (sensorfw delivers a reading only when the value
@@ -88,9 +126,14 @@ dconf write /apps/owlfish/dim 50                 # percent, 0-75, default 0
 dconf write /apps/owlfish/dim_cutoff false       # default true
 dconf write /apps/owlfish/dim_cutoff_lux 500     # 100-50000, default 1000
 dconf write /apps/owlfish/schedule true          # warm only at night, default false
+dconf write /apps/owlfish/schedule_sun true      # sunset to sunrise instead of fixed times, default false
 dconf write /apps/owlfish/schedule_from 1320     # minutes after midnight (22:00), default 1260
 dconf write /apps/owlfish/schedule_to 390        # 06:30, default 420
 dconf write /apps/owlfish/schedule_transition 30 # minutes, 0-120, default 60
+dconf write /apps/owlfish/location_manual true   # sun at the coordinates below, default false
+dconf write /apps/owlfish/latitude 60.17         # degrees, north positive
+dconf write /apps/owlfish/longitude 24.94        # degrees, east positive
+dconf read /apps/owlfish/sun_state               # written by the plugin, e.g. 'normal'
 dconf reset -f /apps/owlfish/                    # back to defaults
 ```
 
@@ -122,8 +165,10 @@ The tests render real frames and check pixel values: uniform dim,
 per-channel gain, black staying black, blend state restored for content drawn
 after the filter. They also cover the colour gains against redshift's table,
 tint and dimming combined, the schedule (window, transitions, only the
-colour), the ambient light cut-off, the crash guard, and loading through
-`QGenericPluginFactory`.
+colour), sunset and sunrise against USNO reference values, the time zone
+lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
+guard, and loading through `QGenericPluginFactory`, including a sun schedule
+at fake polar coordinates (`OWLFISH_LOCATION_MANUAL=1 OWLFISH_LATITUDE=89.9`).
 
 Plugin options, for testing outside lipstick:
 `QT_QPA_GENERIC_PLUGINS=owlfish:class=<QQuickWindow subclass>:process=<exe or *>`.
@@ -151,6 +196,7 @@ menu, then:
 
 ```sh
 devel-su journalctl -n 500 --no-pager | grep temperature   # e.g. "enabled true temperature 4500 K dim 0 % ..."
+devel-su journalctl -n 500 --no-pager | grep "Sun for"     # e.g. Sun for "2026-09-28" in "Europe/Berlin" sunset 19:04 sunrise 07:10
 ```
 
 Sailfish OS keeps the journal in RAM and only 1 MB of it

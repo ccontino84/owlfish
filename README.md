@@ -4,8 +4,9 @@ Easier on the eyes in the evening: Owlfish tints the Sailfish OS display
 warmer and can make it darker than its lowest brightness, like Android's
 *Night Light* and *Extra Dim* in one.
 
-- **Warmth** from no tint (6500 K) down to no blue at all (1900 K), all day or
-  only at night, with a gradual change at the start and end times.
+- **Warmth** from no tint (6500 K) down to no blue at all (1900 K), all the
+  time, between fixed times, or from sunset to sunrise, with a gradual change
+  at the start and end.
 - **Dimming** on top of the current brightness, by up to 75 %, optionally only
   in the dark: the light sensor turns it off in bright light, for example
   outdoors, and back on when it gets darker.
@@ -58,10 +59,12 @@ options that do not apply are greyed out.
   (tap to toggle, long press to open the page).
 - **Colour temperature**
   - **Warmth**: 6500 K (no tint) to 1900 K (no blue), default 4500 K.
-  - **Only at night**: warm only between the start and end times (default
-    21:00-07:00), neutral the rest of the day. **Gradual change** (off,
-    30 min, 1 h, 2 h) warms up from the start time and is back to neutral at
-    the end time. A line below says what the colour is doing now.
+  - **When**: *All the time*; *Fixed times*, warm only between the start
+    and end times (default 21:00-07:00); or *Sunset to sunrise*. Neutral the
+    rest of the day. **Gradual change** (off, 30 min, 1 h, 2 h) warms up from
+    the start time or sunset and is back to neutral at the end time or
+    sunrise. A line below says what the colour is doing now.
+  - **Set location manually** (for sunset to sunrise): see below.
 - **Dimming**
   - **Darker than the current brightness**: off, or 5-75 %.
   - **Only in the dark**: above the chosen light level the dimming fades out,
@@ -70,6 +73,34 @@ options that do not apply are greyed out.
 
 The schedule only affects the colour and the light sensor only the dimming,
 so with both set you get: warm at night, darker in the dark.
+
+### Sunset to sunrise
+
+Owlfish calculates today's sunset and sunrise on the phone, for the city of
+your time zone (for example Berlin for Europe/Berlin), and the page shows
+them. If you travel to another time zone, it follows. It needs no location
+service and no network.
+
+The time zone's city can be some way from you. Each degree of longitude
+(about 70 km in central Europe) moves both times by 4 minutes; latitude
+changes the length of the night, more so in summer and further north:
+
+- In Aachen the sun sets and rises about 29 min later than in Berlin; in
+  Milan about 13 min later than in Rome.
+- Munich's and Kiel's nights (both Berlin time) differ by up to 30-40 min.
+- In large time zones (China, India, the US) the times can be 1-3 h off at
+  the edges, and northern Finland and Helsinki share one time zone.
+
+For most of Europe that is under half an hour, which a gradual change of an
+hour largely hides. If it is too far off, turn on **Set location manually**
+and type or paste your coordinates, e.g. `60.17, 24.94` as copied from a
+map app or website. Switching it off goes back to the time zone and keeps
+what you typed.
+
+Under the midnight sun the colour stays neutral, and in polar night it
+stays warm all day. North or south of 60° the times are approximate (the
+sun crosses the horizon at a shallow angle), and beyond 72° they can be off
+by up to 10 minutes; fixed times give a steadier routine there.
 
 ## Known issues
 
@@ -115,7 +146,9 @@ environment file that tells lipstick to load it.
 - **No cost when off:** with no tint and no dimming the filter is removed.
 - **Privacy:** the light sensor is only read while dimming "only in the
   dark" is in use (and the settings page shows the current level while it
-  is open). Nothing leaves the phone; there is no network access.
+  is open). Sunset and sunrise come from the time zone setting or the
+  coordinates you type; Owlfish never uses the location service. Nothing
+  leaves the phone; there is no network access.
 
 ## Development
 

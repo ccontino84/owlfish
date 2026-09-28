@@ -9,13 +9,18 @@
 #include "crashguard.h"
 #include "schedule.h"
 #include "settings.h"
+#include "sun.h"
+#include "timezonelocation.h"
 
 #include <QGenericPluginFactory>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
 #include <QTemporaryDir>
+#include <QTimeZone>
 #include <QtTest>
+
+#include <cmath>
 
 namespace {
 
@@ -64,6 +69,13 @@ private slots:
     void nightScheduleLastEdge_data();
     void nightScheduleLastEdge();
     void colourStrength();
+    void sunTimes_data();
+    void sunTimes();
+    void timeZoneCoordinates_data();
+    void timeZoneCoordinates();
+    void timeZoneLookup();
+    void timeZoneSystemData();
+    void timeZoneLinks();
     void crashGuard();
     void cutoffFirstReadingAppliesImmediately();
     void cutoffHysteresis();
@@ -75,6 +87,8 @@ private slots:
     void pluginAttachesFilter();
     void pluginCombinesTintAndDim();
     void pluginScheduleOnlyAffectsColour();
+    void pluginSunSchedule();
+    void pluginPolarSun();
     void pluginIgnoresOtherProcesses();
 
 private:
@@ -393,6 +407,242 @@ void tst_Owlfish::colourStrength()
     QCOMPARE(OwlfishController::colourStrength(true, schedule, night), qreal(1));
 }
 
+void tst_Owlfish::sunTimes_data()
+{
+    QTest::addColumn<QDate>("date");
+    QTest::addColumn<double>("latitude");
+    QTest::addColumn<double>("longitude");
+    QTest::addColumn<QByteArray>("zone");
+    QTest::addColumn<int>("state");
+    // Local times, minutes after midnight
+    QTest::addColumn<int>("sunrise");
+    QTest::addColumn<int>("sunset");
+    QTest::addColumn<int>("tolerance");
+
+    // Reference values from the US Naval Observatory's API
+    // (aa.usno.navy.mil/api/rstt/oneday, fetched 2026-09-28), which uses the
+    // same definition of sunrise and sunset. USNO lists events by calendar
+    // date; SunTimes gives this evening's sunset, which in the far north can
+    // be after midnight: there the sunset is the next date's listed one.
+    const int normal = SunTimes::Normal;
+    auto at = [](int hour, int minute) { return hour * 60 + minute; };
+    const double berlin[] = { 52.52, 13.405 };
+    const double sydney[] = { -33.8688, 151.2093 };
+    const double tromso[] = { 69.6496, 18.956 };
+
+    QTest::newRow("Berlin, summer solstice") << QDate(2026, 6, 21) << berlin[0] << berlin[1]
+            << QByteArray("Europe/Berlin") << normal << at(4, 43) << at(21, 33) << 2;
+    QTest::newRow("Berlin, winter solstice") << QDate(2026, 12, 21) << berlin[0] << berlin[1]
+            << QByteArray("Europe/Berlin") << normal << at(8, 15) << at(15, 54) << 2;
+    QTest::newRow("Berlin, DST starts") << QDate(2026, 3, 29) << berlin[0] << berlin[1]
+            << QByteArray("Europe/Berlin") << normal << at(6, 48) << at(19, 35) << 2;
+    QTest::newRow("Berlin, DST ends") << QDate(2026, 10, 25) << berlin[0] << berlin[1]
+            << QByteArray("Europe/Berlin") << normal << at(6, 50) << at(16, 50) << 2;
+    QTest::newRow("Sydney, June") << QDate(2026, 6, 21) << sydney[0] << sydney[1]
+            << QByteArray("Australia/Sydney") << normal << at(7, 0) << at(16, 54) << 2;
+    QTest::newRow("Sydney, December") << QDate(2026, 12, 21) << sydney[0] << sydney[1]
+            << QByteArray("Australia/Sydney") << normal << at(5, 41) << at(20, 5) << 2;
+    QTest::newRow("Sydney, DST starts") << QDate(2026, 10, 4) << sydney[0] << sydney[1]
+            << QByteArray("Australia/Sydney") << normal << at(6, 29) << at(19, 0) << 2;
+    QTest::newRow("New York, DST starts") << QDate(2026, 3, 8) << 40.7128 << -74.006
+            << QByteArray("America/New_York") << normal << at(7, 19) << at(18, 55) << 2;
+    QTest::newRow("Quito, equator") << QDate(2026, 9, 28) << -0.1807 << -78.4678
+            << QByteArray("America/Guayaquil") << normal << at(6, 1) << at(18, 8) << 2;
+    QTest::newRow("Ushuaia, June") << QDate(2026, 6, 21) << -54.8019 << -68.303
+            << QByteArray("America/Argentina/Ushuaia") << normal << at(9, 59) << at(17, 11) << 2;
+    QTest::newRow("Oulu, sunset after midnight") << QDate(2026, 6, 21) << 65.0121 << 25.4651
+            << QByteArray("Europe/Helsinki") << normal << at(2, 19) << at(0, 21) << 3;
+    QTest::newRow("Reykjavik, sunset after midnight") << QDate(2026, 6, 21) << 64.1466 << -21.9426
+            << QByteArray("Atlantic/Reykjavik") << normal << at(2, 55) << at(0, 4) << 3;
+    // The last night before the midnight sun: 50 minutes long
+    QTest::newRow("Tromso, last night") << QDate(2026, 5, 17) << tromso[0] << tromso[1]
+            << QByteArray("Europe/Oslo") << normal << at(1, 18) << at(0, 28) << 3;
+    QTest::newRow("Tromso, midnight sun begins") << QDate(2026, 5, 19) << tromso[0] << tromso[1]
+            << QByteArray("Europe/Oslo") << int(SunTimes::PolarDay) << 0 << 0 << 0;
+    QTest::newRow("Tromso, midnight sun") << QDate(2026, 6, 21) << tromso[0] << tromso[1]
+            << QByteArray("Europe/Oslo") << int(SunTimes::PolarDay) << 0 << 0 << 0;
+    QTest::newRow("Tromso, short day") << QDate(2026, 11, 25) << tromso[0] << tromso[1]
+            << QByteArray("Europe/Oslo") << normal << at(10, 43) << at(12, 18) << 3;
+    QTest::newRow("Tromso, polar night begins") << QDate(2026, 11, 28) << tromso[0] << tromso[1]
+            << QByteArray("Europe/Oslo") << int(SunTimes::PolarNight) << 0 << 0 << 0;
+    QTest::newRow("Tromso, polar night") << QDate(2026, 12, 21) << tromso[0] << tromso[1]
+            << QByteArray("Europe/Oslo") << int(SunTimes::PolarNight) << 0 << 0 << 0;
+}
+
+void tst_Owlfish::sunTimes()
+{
+    QFETCH(QDate, date);
+    QFETCH(double, latitude);
+    QFETCH(double, longitude);
+    QFETCH(QByteArray, zone);
+    QFETCH(int, state);
+    QFETCH(int, sunrise);
+    QFETCH(int, sunset);
+    QFETCH(int, tolerance);
+
+    const QTimeZone timeZone(zone);
+    QVERIFY(timeZone.isValid());
+
+    const SunTimes sun = SunTimes::compute(date, latitude, longitude);
+    QCOMPARE(int(sun.state()), state);
+    if (state != SunTimes::Normal) {
+        QVERIFY(!sun.sunrise().isValid());
+        QVERIFY(!sun.sunset().isValid());
+        return;
+    }
+
+    auto check = [&](const char *name, const QDateTime &time, int expected) {
+        const int minutes = SunTimes::minuteOfDay(time, timeZone);
+        const int day = 24 * 60;
+        const int difference = qAbs(((minutes - expected) % day + day + day / 2) % day - day / 2);
+        QVERIFY2(difference <= tolerance,
+                 qPrintable(QStringLiteral("%1 at %2:%3, expected %4:%5")
+                            .arg(QLatin1String(name))
+                            .arg(minutes / 60).arg(minutes % 60, 2, 10, QLatin1Char('0'))
+                            .arg(expected / 60).arg(expected % 60, 2, 10, QLatin1Char('0'))));
+    };
+    check("sunrise", sun.sunrise(), sunrise);
+    check("sunset", sun.sunset(), sunset);
+    // The sunset follows the sunrise, less than a day later
+    QVERIFY(sun.sunrise() < sun.sunset());
+    QVERIFY(sun.sunrise().secsTo(sun.sunset()) < 24 * 3600);
+}
+
+void tst_Owlfish::timeZoneCoordinates_data()
+{
+    QTest::addColumn<QString>("text");
+    QTest::addColumn<bool>("valid");
+    QTest::addColumn<double>("latitude");
+    QTest::addColumn<double>("longitude");
+
+    QTest::newRow("minutes") << "+5230+01322" << true << 52.5 << 13 + 22 / 60.0;
+    QTest::newRow("south east") << "-3352+15113" << true << -(33 + 52 / 60.0) << 151 + 13 / 60.0;
+    QTest::newRow("seconds") << "+404251-0740023" << true
+                             << 40 + 42 / 60.0 + 51 / 3600.0 << -(74 + 0 / 60.0 + 23 / 3600.0);
+    QTest::newRow("mixed") << "-5448-06818" << true << -(54 + 48 / 60.0) << -(68 + 18 / 60.0);
+    QTest::newRow("short longitude") << "+5230+1322" << false << 0.0 << 0.0;
+    QTest::newRow("no sign") << "5230+01322" << false << 0.0 << 0.0;
+    QTest::newRow("beyond the pole") << "+9100+00000" << false << 0.0 << 0.0;
+    QTest::newRow("empty") << "" << false << 0.0 << 0.0;
+}
+
+void tst_Owlfish::timeZoneCoordinates()
+{
+    QFETCH(QString, text);
+    QFETCH(bool, valid);
+    QFETCH(double, latitude);
+    QFETCH(double, longitude);
+
+    double lat = 0, lon = 0;
+    QCOMPARE(TimeZoneLocation::parseCoordinates(text, &lat, &lon), valid);
+    if (valid) {
+        QVERIFY(qAbs(lat - latitude) < 1e-9);
+        QVERIFY(qAbs(lon - longitude) < 1e-9);
+    }
+}
+
+void tst_Owlfish::timeZoneLookup()
+{
+    QTemporaryDir root;
+    QVERIFY(QDir(root.path()).mkpath(QStringLiteral("usr/share/zoneinfo")));
+    auto write = [&root](const char *name, const QByteArray &content) {
+        QFile file(root.filePath(QStringLiteral("usr/share/zoneinfo/") + QLatin1String(name)));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(content);
+    };
+    // Excerpts in tzdata's format; zone1970.tab has no Oslo, and its Berlin
+    // line covers several countries
+    write("zone.tab",
+          "# comment\tline\n"
+          "DE\t+5230+01322\tEurope/Berlin\tmost of Germany\n"
+          "NO\t+5955+01045\tEurope/Oslo\n"
+          "AR\t-3436-05827\tAmerica/Argentina/Buenos_Aires\tBuenos Aires (BA, CF)\n");
+    write("zone1970.tab",
+          "DE,DK,NO,SE,SJ\t+5230+01322\tEurope/Berlin\tmost of Germany\n"
+          "CH,DE,LI\t+4723+00832\tEurope/Zurich\tBüsingen\n");
+
+    const TimeZoneLocation oslo(QStringLiteral("Europe/Oslo"), root.path());
+    QVERIFY(oslo.isValid());
+    QCOMPARE(oslo.place(), QStringLiteral("Oslo"));
+    QVERIFY(qAbs(oslo.latitude() - (59 + 55 / 60.0)) < 1e-9);
+    QVERIFY(qAbs(oslo.longitude() - (10 + 45 / 60.0)) < 1e-9);
+
+    // Only in zone1970.tab
+    const TimeZoneLocation zurich(QStringLiteral("Europe/Zurich"), root.path());
+    QVERIFY(zurich.isValid());
+    QVERIFY(qAbs(zurich.latitude() - (47 + 23 / 60.0)) < 1e-9);
+
+    const TimeZoneLocation buenosAires(QStringLiteral("America/Argentina/Buenos_Aires"), root.path());
+    QVERIFY(buenosAires.isValid());
+    QCOMPARE(buenosAires.place(), QStringLiteral("Buenos Aires"));
+    QVERIFY(buenosAires.latitude() < 0 && buenosAires.longitude() < 0);
+
+    // No location
+    QVERIFY(!TimeZoneLocation(QStringLiteral("UTC"), root.path()).isValid());
+    QVERIFY(!TimeZoneLocation(QString(), root.path()).isValid());
+    QVERIFY(!TimeZoneLocation(QStringLiteral("Europe/Berlin"),
+                              root.filePath(QStringLiteral("missing"))).isValid());
+}
+
+void tst_Owlfish::timeZoneSystemData()
+{
+    // The host's own tzdata, if it has the same files as Sailfish OS
+    if (!QFile::exists(QStringLiteral("/usr/share/zoneinfo/zone.tab")))
+        QSKIP("No zone.tab on this system");
+    const TimeZoneLocation berlin(QStringLiteral("Europe/Berlin"));
+    QVERIFY(berlin.isValid());
+    QVERIFY(qAbs(berlin.latitude() - 52.5) < 0.1);
+    QVERIFY(qAbs(berlin.longitude() - 13.37) < 0.1);
+    // A zone.tab line of its own, not Berlin's from zone1970.tab
+    const TimeZoneLocation oslo(QStringLiteral("Europe/Oslo"));
+    QVERIFY(oslo.isValid());
+    QVERIFY(qAbs(oslo.latitude() - 59.9) < 0.1);
+}
+
+void tst_Owlfish::timeZoneLinks()
+{
+    QTemporaryDir root;
+    QDir dir(root.path());
+    for (const char *path : { "etc", "var/lib/timed", "usr/share/zoneinfo/Europe",
+                              "usr/share/zoneinfo/posix/Europe" })
+        QVERIFY(dir.mkpath(QLatin1String(path)));
+    QFile berlin(dir.filePath(QStringLiteral("usr/share/zoneinfo/Europe/Berlin")));
+    QVERIFY(berlin.open(QIODevice::WriteOnly));
+    berlin.close();
+    const QString localtime = dir.filePath(QStringLiteral("etc/localtime"));
+    const QString timed = dir.filePath(QStringLiteral("var/lib/timed/localtime"));
+
+    // No /etc/localtime, or a plain file
+    QCOMPARE(TimeZoneLocation::systemZone(root.path()), QString());
+
+    // Sailfish OS: through timed's link. Oslo is an alias installed as a
+    // link to Berlin's file; resolving the whole chain would give Berlin.
+    QVERIFY(QFile::link(dir.filePath(QStringLiteral("usr/share/zoneinfo/Europe/Berlin")),
+                        dir.filePath(QStringLiteral("usr/share/zoneinfo/Europe/Oslo"))));
+    QVERIFY(QFile::link(dir.filePath(QStringLiteral("usr/share/zoneinfo/Europe/Oslo")), timed));
+    QVERIFY(QFile::link(timed, localtime));
+    QCOMPARE(TimeZoneLocation::systemZone(root.path()), QStringLiteral("Europe/Oslo"));
+
+    // A relative link, into the posix variant
+    QVERIFY(QFile::remove(localtime));
+    QVERIFY(QFile::link(QStringLiteral("../usr/share/zoneinfo/posix/Europe/Rome"), localtime));
+    QCOMPARE(TimeZoneLocation::systemZone(root.path()), QStringLiteral("Europe/Rome"));
+
+    // A loop ends
+    QVERIFY(QFile::remove(localtime));
+    QVERIFY(QFile::remove(timed));
+    QVERIFY(QFile::link(timed, localtime));
+    QVERIFY(QFile::link(localtime, timed));
+    QCOMPARE(TimeZoneLocation::systemZone(root.path()), QString());
+
+    // A plain file
+    QVERIFY(QFile::remove(localtime));
+    QFile plain(localtime);
+    QVERIFY(plain.open(QIODevice::WriteOnly));
+    plain.close();
+    QCOMPARE(TimeZoneLocation::systemZone(root.path()), QString());
+}
+
 void tst_Owlfish::crashGuard()
 {
     QTemporaryDir dir;
@@ -646,6 +896,111 @@ void tst_Owlfish::pluginScheduleOnlyAffectsColour()
     QQuickItem *filter = nullptr;
     QTRY_VERIFY((filter = view->contentItem()->findChild<QQuickItem *>(QStringLiteral("owlfish-filter"))));
     QTRY_COMPARE(filter->property("gain").value<QVector3D>(), QVector3D(0.5f, 0.5f, 0.5f));
+}
+
+void tst_Owlfish::pluginSunSchedule()
+{
+    // Manual coordinates; the plugin's own controller is not reachable from
+    // here, so run one directly to see what it publishes
+    const double latitude = 52.52, longitude = 13.405;
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "3400");
+    qputenv("OWLFISH_DIM", "0");
+    qputenv("OWLFISH_SCHEDULE", "1");
+    qputenv("OWLFISH_SCHEDULE_SUN", "1");
+    qputenv("OWLFISH_SCHEDULE_TRANSITION", "0");
+    qputenv("OWLFISH_LOCATION_MANUAL", "1");
+    qputenv("OWLFISH_LATITUDE", QByteArray::number(latitude));
+    qputenv("OWLFISH_LONGITUDE", QByteArray::number(longitude));
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(new OwlfishController(
+            "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts"))));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_VERIFY(controller->filterItem());
+
+    // The sun times of today at those coordinates, and the matching colour
+    const SunTimes sun = SunTimes::compute(QDate::currentDate(), latitude, longitude);
+    QCOMPARE(int(sun.state()), int(SunTimes::Normal));
+    OwlfishSettings *settings = controller->settings();
+    QCOMPARE(settings->published(QStringLiteral("sun_state")).toString(), QStringLiteral("normal"));
+    QCOMPARE(settings->published(QStringLiteral("sun_set")).toInt(), SunTimes::minuteOfDay(sun.sunset()));
+    QCOMPARE(settings->published(QStringLiteral("sun_rise")).toInt(), SunTimes::minuteOfDay(sun.sunrise()));
+    QCOMPARE(settings->published(QStringLiteral("sun_latitude")).toDouble(), latitude);
+
+    const OwlfishSchedule night(SunTimes::minuteOfDay(sun.sunset()),
+                                  SunTimes::minuteOfDay(sun.sunrise()), 0);
+    const bool warm = night.contains(QDateTime::currentDateTime());
+    const QVector3D expected = warm ? ColorTemperature::gain(3400) : QVector3D(1, 1, 1);
+    QTRY_VERIFY(qFuzzyCompare(controller->filterItem()->gain(), expected));
+    controller.reset();
+
+    // Manual without coordinates: the time zone's location, if it has one
+    qunsetenv("OWLFISH_LATITUDE");
+    qunsetenv("OWLFISH_LONGITUDE");
+    controller.reset(new OwlfishController("QQuickView", dir.filePath(QStringLiteral("unhealthy-starts"))));
+    QTRY_VERIFY(controller->filterItem());
+    settings = controller->settings();
+    const QVariant autoLatitude = settings->published(QStringLiteral("auto_latitude"));
+    QCOMPARE(settings->published(QStringLiteral("sun_latitude")), autoLatitude);
+    QCOMPARE(settings->published(QStringLiteral("sun_place")).toString().isEmpty(), !autoLatitude.isValid());
+    if (!autoLatitude.isValid())
+        QCOMPARE(settings->published(QStringLiteral("sun_state")).toString(), QStringLiteral("no_location"));
+
+    for (const char *name : { "OWLFISH_SCHEDULE", "OWLFISH_SCHEDULE_SUN", "OWLFISH_SCHEDULE_TRANSITION",
+                              "OWLFISH_LOCATION_MANUAL" })
+        qunsetenv(name);
+}
+
+void tst_Owlfish::pluginPolarSun()
+{
+    // Near the poles one of the two has midnight sun and the other polar
+    // night, except for a few days around the equinoxes
+    const QDate today = QDate::currentDate();
+    double polarDay = 0, polarNight = 0;
+    for (double latitude : { 89.9, -89.9 }) {
+        const SunTimes::State state = SunTimes::compute(today, latitude, 0).state();
+        if (state == SunTimes::PolarDay)
+            polarDay = latitude;
+        else if (state == SunTimes::PolarNight)
+            polarNight = latitude;
+    }
+    if (polarDay == 0 || polarNight == 0)
+        QSKIP("Too close to an equinox");
+
+    auto gainAt = [this](double latitude) {
+        qputenv("OWLFISH_ENABLED", "1");
+        qputenv("OWLFISH_TEMPERATURE", "3400");
+        qputenv("OWLFISH_DIM", "50");
+        qputenv("OWLFISH_SCHEDULE", "1");
+        qputenv("OWLFISH_SCHEDULE_SUN", "1");
+        qputenv("OWLFISH_LOCATION_MANUAL", "1");
+        qputenv("OWLFISH_LATITUDE", QByteArray::number(latitude));
+        qputenv("OWLFISH_LONGITUDE", "0");
+        // Every load in this run counts as an unhealthy start; the earlier
+        // tests have used up the crash guard's allowance
+        QFile::remove(CrashGuard::defaultFilePath());
+        QCoreApplication::addLibraryPath(QStringLiteral(OWLFISH_PLUGINS_DIR));
+        QScopedPointer<QObject> plugin(QGenericPluginFactory::create(
+                QStringLiteral("owlfish"), QStringLiteral("class=QQuickView:process=*")));
+        for (const char *name : { "OWLFISH_SCHEDULE", "OWLFISH_SCHEDULE_SUN", "OWLFISH_LOCATION_MANUAL",
+                                  "OWLFISH_LATITUDE", "OWLFISH_LONGITUDE" })
+            qunsetenv(name);
+        QScopedPointer<QQuickView> view(createView());
+        QQuickItem *filter = nullptr;
+        if (!view || !QTest::qWaitFor([&]() {
+            return (filter = view->contentItem()->findChild<QQuickItem *>(QStringLiteral("owlfish-filter")));
+        }))
+            return QVector3D(-1, -1, -1);
+        // Give the fade time to finish
+        QTest::qWait(600);
+        return filter->property("gain").value<QVector3D>();
+    };
+
+    // Midnight sun: neutral, only the dimming
+    QVERIFY(qFuzzyCompare(gainAt(polarDay), QVector3D(0.5f, 0.5f, 0.5f)));
+    // Polar night: warm all day
+    QVERIFY(qFuzzyCompare(gainAt(polarNight), ColorTemperature::gain(3400) * 0.5f));
 }
 
 void tst_Owlfish::pluginIgnoresOtherProcesses()

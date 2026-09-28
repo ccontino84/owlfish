@@ -11,6 +11,7 @@
 #endif
 
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -51,6 +52,13 @@ int clampTransition(double value)
     return qBound(0, int(std::lround(value)), int(OwlfishSettings::MaximumTransition));
 }
 
+double checkDegrees(double value, double limit)
+{
+    if (!std::isfinite(value) || qAbs(value) > limit)
+        return std::numeric_limits<double>::quiet_NaN();
+    return value;
+}
+
 }
 
 #ifdef HAVE_MLITE
@@ -60,6 +68,13 @@ namespace {
 MDConfItem *item(const char *key, QObject *parent)
 {
     return new MDConfItem(QStringLiteral("/apps/owlfish/") + QLatin1String(key), parent);
+}
+
+double checkDegrees(const QVariant &value, double limit)
+{
+    bool ok = false;
+    const double degrees = value.toDouble(&ok);
+    return checkDegrees(ok ? degrees : std::numeric_limits<double>::quiet_NaN(), limit);
 }
 
 }
@@ -72,14 +87,18 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_cutoffEnabled(item("dim_cutoff", this))
     , m_cutoffLux(item("dim_cutoff_lux", this))
     , m_scheduled(item("schedule", this))
+    , m_scheduleSun(item("schedule_sun", this))
     , m_scheduleFrom(item("schedule_from", this))
     , m_scheduleTo(item("schedule_to", this))
     , m_scheduleTransition(item("schedule_transition", this))
-    , m_alsMultiplier(item("als_multiplier", this))
+    , m_locationManual(item("location_manual", this))
+    , m_latitude(item("latitude", this))
+    , m_longitude(item("longitude", this))
 {
     // Not the keys only the plugin writes
     for (MDConfItem *item : { m_enabled, m_temperature, m_dim, m_cutoffEnabled, m_cutoffLux,
-                              m_scheduled, m_scheduleFrom, m_scheduleTo, m_scheduleTransition })
+                              m_scheduled, m_scheduleSun, m_scheduleFrom, m_scheduleTo,
+                              m_scheduleTransition, m_locationManual, m_latitude, m_longitude })
         connect(item, &MDConfItem::valueChanged, this, &OwlfishSettings::changed);
 }
 
@@ -113,6 +132,11 @@ bool OwlfishSettings::scheduled() const
     return m_scheduled->value(false).toBool();
 }
 
+bool OwlfishSettings::scheduleSun() const
+{
+    return m_scheduleSun->value(false).toBool();
+}
+
 int OwlfishSettings::scheduleFrom() const
 {
     return clampMinuteOfDay(m_scheduleFrom->value(DefaultFrom).toDouble(), DefaultFrom);
@@ -128,10 +152,37 @@ int OwlfishSettings::scheduleTransition() const
     return clampTransition(m_scheduleTransition->value(DefaultTransition).toDouble());
 }
 
+bool OwlfishSettings::locationManual() const
+{
+    return m_locationManual->value(false).toBool();
+}
+
+double OwlfishSettings::latitude() const
+{
+    return checkDegrees(m_latitude->value(), 90);
+}
+
+double OwlfishSettings::longitude() const
+{
+    return checkDegrees(m_longitude->value(), 180);
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
-    if (m_alsMultiplier->value().toDouble() != multiplier)
-        m_alsMultiplier->set(multiplier);
+    publish(QStringLiteral("als_multiplier"), multiplier);
+}
+
+void OwlfishSettings::publish(const QString &key, const QVariant &value)
+{
+    MDConfItem *&item = m_publishedItems[key];
+    if (!item)
+        item = new MDConfItem(QStringLiteral("/apps/owlfish/") + key, this);
+    if (item->value() == value)
+        return;
+    if (value.isValid())
+        item->set(value);
+    else
+        item->unset();
 }
 
 #else
@@ -156,9 +207,13 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_cutoffEnabled(env("dim_cutoff", 1) != 0)
     , m_cutoffLux(clampLux(env("dim_cutoff_lux", DefaultCutoffLux)))
     , m_scheduled(env("schedule", 0) != 0)
+    , m_scheduleSun(env("schedule_sun", 0) != 0)
     , m_scheduleFrom(clampMinuteOfDay(env("schedule_from", DefaultFrom), DefaultFrom))
     , m_scheduleTo(clampMinuteOfDay(env("schedule_to", DefaultTo), DefaultTo))
     , m_scheduleTransition(clampTransition(env("schedule_transition", DefaultTransition)))
+    , m_locationManual(env("location_manual", 0) != 0)
+    , m_latitude(checkDegrees(env("latitude", std::numeric_limits<double>::quiet_NaN()), 90))
+    , m_longitude(checkDegrees(env("longitude", std::numeric_limits<double>::quiet_NaN()), 180))
 {
 }
 
@@ -192,6 +247,11 @@ bool OwlfishSettings::scheduled() const
     return m_scheduled;
 }
 
+bool OwlfishSettings::scheduleSun() const
+{
+    return m_scheduleSun;
+}
+
 int OwlfishSettings::scheduleFrom() const
 {
     return m_scheduleFrom;
@@ -207,8 +267,32 @@ int OwlfishSettings::scheduleTransition() const
     return m_scheduleTransition;
 }
 
-void OwlfishSettings::publishAlsMultiplier(double)
+bool OwlfishSettings::locationManual() const
 {
+    return m_locationManual;
+}
+
+double OwlfishSettings::latitude() const
+{
+    return m_latitude;
+}
+
+double OwlfishSettings::longitude() const
+{
+    return m_longitude;
+}
+
+void OwlfishSettings::publishAlsMultiplier(double multiplier)
+{
+    publish(QStringLiteral("als_multiplier"), multiplier);
+}
+
+void OwlfishSettings::publish(const QString &key, const QVariant &value)
+{
+    if (value.isValid())
+        m_published.insert(key, value);
+    else
+        m_published.remove(key);
 }
 
 #endif

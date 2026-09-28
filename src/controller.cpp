@@ -12,6 +12,9 @@
 #include <QGuiApplication>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTimeZone>
+
+#include <cmath>
 
 #ifdef HAVE_QTSENSORS
 #include <QLightSensor>
@@ -48,6 +51,12 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     , m_alsMultiplier(1.0)
     , m_findAttempts(0)
     , m_displayOn(true)
+    , m_sunLocated(false)
+    , m_sunLatitude(0)
+    , m_sunLongitude(0)
+    , m_sunState(SunTimes::Normal)
+    , m_sunset(0)
+    , m_sunrise(0)
 {
     if (!m_guard.begin()) {
         qCWarning(lcOwlfish) << "Disabled after" << m_guard.unhealthyStarts()
@@ -163,10 +172,13 @@ void OwlfishController::applySettings()
                         << "dim" << m_settings->dim() << "%"
                         << "cutoff" << m_settings->cutoffEnabled() << m_settings->cutoffLux() << "lux"
                         << "schedule" << m_settings->scheduled() << m_settings->scheduleFrom()
-                        << m_settings->scheduleTo() << m_settings->scheduleTransition();
+                        << m_settings->scheduleTo() << m_settings->scheduleTransition()
+                        << "sun" << m_settings->scheduleSun() << "manual location" << m_settings->locationManual();
 
     m_cutoff->setThreshold(m_settings->cutoffLux());
     updateLightSensor();
+
+    updateSun();
 
     updateScheduleTimer();
     updateGain(SettingsFadeMs);
@@ -180,8 +192,103 @@ void OwlfishController::cutoffChanged(bool bright)
 
 OwlfishSchedule OwlfishController::schedule() const
 {
+    if (m_settings->scheduleSun()) {
+        // No night under the midnight sun, and none without a location. In
+        // polar night the colour stays on (currentColourStrength).
+        if (!m_sunLocated || m_sunState != SunTimes::Normal)
+            return OwlfishSchedule(0, 0, 0);
+        // Today's sunrise stands in for tomorrow's: it only moves by minutes
+        // a day
+        return OwlfishSchedule(m_sunset, m_sunrise, m_settings->scheduleTransition());
+    }
     return OwlfishSchedule(m_settings->scheduleFrom(), m_settings->scheduleTo(),
                              m_settings->scheduleTransition());
+}
+
+qreal OwlfishController::currentColourStrength(const QDateTime &now) const
+{
+    if (m_settings->scheduled() && m_settings->scheduleSun() && m_sunLocated
+            && m_sunState == SunTimes::PolarNight)
+        return 1;
+    return colourStrength(m_settings->scheduled(), schedule(), now);
+}
+
+void OwlfishController::updateSun()
+{
+    // Checked on every schedule tick, so a new time zone or date is picked
+    // up within one. Reading two links is cheap; zone.tab is only read again
+    // when the zone changes.
+    QString zone = TimeZoneLocation::systemZone();
+    // Qt 5.6 only follows one link of /etc/localtime, which is not enough on
+    // Sailfish OS, so this is only a fallback
+    if (zone.isEmpty())
+        zone = QString::fromUtf8(QTimeZone::systemTimeZoneId());
+    if (zone != m_zoneLocation.zone())
+        m_zoneLocation = TimeZoneLocation(zone);
+
+    bool located = m_zoneLocation.isValid();
+    double latitude = m_zoneLocation.latitude();
+    double longitude = m_zoneLocation.longitude();
+    if (m_settings->locationManual() && std::isfinite(m_settings->latitude())
+            && std::isfinite(m_settings->longitude())) {
+        located = true;
+        latitude = m_settings->latitude();
+        longitude = m_settings->longitude();
+    }
+
+    const QDate today = QDate::currentDate();
+    if (today == m_sunDate && zone == m_sunZone && located == m_sunLocated
+            && (!located || (latitude == m_sunLatitude && longitude == m_sunLongitude)))
+        return;
+
+    m_sunDate = today;
+    m_sunZone = zone;
+    m_sunLocated = located;
+    m_sunLatitude = latitude;
+    m_sunLongitude = longitude;
+    if (located) {
+        const SunTimes sun = SunTimes::compute(today, latitude, longitude);
+        m_sunState = sun.state();
+        if (m_sunState == SunTimes::Normal) {
+            // In the same local time as the schedule's "now"
+            m_sunset = SunTimes::minuteOfDay(sun.sunset());
+            m_sunrise = SunTimes::minuteOfDay(sun.sunrise());
+        }
+    }
+
+    qCInfo(lcOwlfish) << "Sun for" << today.toString(Qt::ISODate) << "in" << zone
+                        << (!located ? "no location"
+                            : m_sunState == SunTimes::PolarDay ? "midnight sun"
+                            : m_sunState == SunTimes::PolarNight ? "polar night"
+                            : qPrintable(QStringLiteral("sunset %1:%2 sunrise %3:%4")
+                                         .arg(m_sunset / 60, 2, 10, QLatin1Char('0'))
+                                         .arg(m_sunset % 60, 2, 10, QLatin1Char('0'))
+                                         .arg(m_sunrise / 60, 2, 10, QLatin1Char('0'))
+                                         .arg(m_sunrise % 60, 2, 10, QLatin1Char('0'))));
+    publishSun();
+}
+
+void OwlfishController::publishSun()
+{
+    // The page reads no files; it shows what the plugin found
+    const bool zoneLocated = m_zoneLocation.isValid();
+    // Always set, so the page can tell whether the auto_ keys apply
+    m_settings->publish(QStringLiteral("sun_place"), zoneLocated ? m_zoneLocation.place() : QString());
+    m_settings->publish(QStringLiteral("auto_latitude"),
+                        zoneLocated ? QVariant(m_zoneLocation.latitude()) : QVariant());
+    m_settings->publish(QStringLiteral("auto_longitude"),
+                        zoneLocated ? QVariant(m_zoneLocation.longitude()) : QVariant());
+
+    const bool normal = m_sunLocated && m_sunState == SunTimes::Normal;
+    const char *state = !m_sunLocated ? "no_location"
+                      : m_sunState == SunTimes::PolarDay ? "polar_day"
+                      : m_sunState == SunTimes::PolarNight ? "polar_night"
+                      : "normal";
+    m_settings->publish(QStringLiteral("sun_state"), QString::fromLatin1(state));
+    m_settings->publish(QStringLiteral("sun_set"), normal ? QVariant(m_sunset) : QVariant());
+    m_settings->publish(QStringLiteral("sun_rise"), normal ? QVariant(m_sunrise) : QVariant());
+    m_settings->publish(QStringLiteral("sun_latitude"),
+                        m_sunLocated ? QVariant(m_sunLatitude) : QVariant());
 }
 
 void OwlfishController::updateScheduleTimer()
@@ -197,6 +304,7 @@ void OwlfishController::updateScheduleTimer()
 
 void OwlfishController::scheduleTick()
 {
+    updateSun();
     updateGain(ScheduleStepFadeMs);
 }
 
@@ -222,8 +330,7 @@ void OwlfishController::updateGain(int fadeMs)
         return;
     }
 
-    const qreal colour = colourStrength(m_settings->scheduled(), schedule(),
-                                        QDateTime::currentDateTime());
+    const qreal colour = currentColourStrength(QDateTime::currentDateTime());
     const bool dimSuspended = m_settings->cutoffEnabled() && m_cutoff->isBright();
     const int dim = dimSuspended ? 0 : m_settings->dim();
     fadeTo(filterGain(colour, m_settings->temperature(), dim), fadeMs);

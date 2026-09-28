@@ -5,9 +5,14 @@
 #define OWLFISH_SETTINGS_H
 
 #include <QObject>
+#include <QVariant>
 
 #ifdef HAVE_MLITE
+#include <QHash>
+
 class MDConfItem;
+#else
+#include <QVariantMap>
 #endif
 
 // User settings under dconf /apps/owlfish/:
@@ -18,15 +23,28 @@ class MDConfItem;
 //   dim_cutoff           bool, default true: no extra dimming in bright light
 //   dim_cutoff_lux       ambient light level that counts as bright, 100 to
 //                        50000, default 1000
-//   schedule             bool, default false: warm colour only between
-//                        schedule_from and schedule_to, neutral otherwise
+//   schedule             bool, default false: warm colour only at night,
+//                        neutral otherwise
+//   schedule_sun         bool, default false: the night is from sunset to
+//                        sunrise instead of schedule_from to schedule_to
 //   schedule_from        start, minutes after midnight, default 21:00
 //   schedule_to          end, default 07:00
 //   schedule_transition  minutes to fade in after the start and out before
 //                        the end, default 60
-// Written by the plugin:
+//   location_manual      bool, default false: sunset and sunrise at latitude
+//                        and longitude instead of the time zone's city
+//   latitude, longitude  degrees, north and east positive
+// Written by the plugin, for the settings page:
 //   als_multiplier       the ALS calibration factor, so the settings page can
 //                        show readings in the same units
+//   sun_place            the time zone's city, empty if the time zone has
+//                        no location
+//   auto_latitude, auto_longitude
+//                        the city's location; unset if there is none
+//   sun_state            "normal", "polar_day", "polar_night" or
+//                        "no_location", for today; always set
+//   sun_set, sun_rise    minutes after midnight; unset unless normal
+//   sun_latitude         the latitude sun_state is for
 class OwlfishSettings : public QObject
 {
     Q_OBJECT
@@ -53,11 +71,23 @@ public:
     bool cutoffEnabled() const;
     int cutoffLux() const;
     bool scheduled() const;
+    bool scheduleSun() const;
     int scheduleFrom() const;
     int scheduleTo() const;
     int scheduleTransition() const;
+    bool locationManual() const;
+    // NaN if not set or out of range
+    double latitude() const;
+    double longitude() const;
 
     void publishAlsMultiplier(double multiplier);
+    // Writes one of the keys the plugin writes, if it changed. An invalid
+    // value unsets it.
+    void publish(const QString &key, const QVariant &value);
+#ifndef HAVE_MLITE
+    // What was published, for tests
+    QVariant published(const QString &key) const { return m_published.value(key); }
+#endif
 
 signals:
     void changed();
@@ -70,10 +100,14 @@ private:
     MDConfItem *m_cutoffEnabled;
     MDConfItem *m_cutoffLux;
     MDConfItem *m_scheduled;
+    MDConfItem *m_scheduleSun;
     MDConfItem *m_scheduleFrom;
     MDConfItem *m_scheduleTo;
     MDConfItem *m_scheduleTransition;
-    MDConfItem *m_alsMultiplier;
+    MDConfItem *m_locationManual;
+    MDConfItem *m_latitude;
+    MDConfItem *m_longitude;
+    QHash<QString, MDConfItem *> m_publishedItems;
 #else
     bool m_enabled;
     int m_temperature;
@@ -81,9 +115,14 @@ private:
     bool m_cutoffEnabled;
     int m_cutoffLux;
     bool m_scheduled;
+    bool m_scheduleSun;
     int m_scheduleFrom;
     int m_scheduleTo;
     int m_scheduleTransition;
+    bool m_locationManual;
+    double m_latitude;
+    double m_longitude;
+    QVariantMap m_published;
 #endif
 };
 

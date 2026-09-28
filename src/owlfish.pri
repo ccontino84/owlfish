@@ -16,7 +16,9 @@ HEADERS += \
     $$PWD/crashguard.h \
     $$PWD/logging.h \
     $$PWD/schedule.h \
-    $$PWD/settings.h
+    $$PWD/settings.h \
+    $$PWD/sun.h \
+    $$PWD/timezonelocation.h
 
 SOURCES += \
     $$PWD/alscalibration.cpp \
@@ -28,7 +30,9 @@ SOURCES += \
     $$PWD/crashguard.cpp \
     $$PWD/logging.cpp \
     $$PWD/schedule.cpp \
-    $$PWD/settings.cpp
+    $$PWD/settings.cpp \
+    $$PWD/sun.cpp \
+    $$PWD/timezonelocation.cpp
 
 # On Sailfish OS settings come from dconf via mlite5; host builds fall back
 # to environment variables (see settings.cpp)
