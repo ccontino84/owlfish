@@ -43,6 +43,10 @@ reviewed and tested on real devices by the author.
    the top menu shortcut, go to Settings > Top menu and turn on "Owlfish"
    under *Switches*.
 
+**Upgrading** works the same way: install the new RPM over the old one and
+restart the phone, because the old version keeps running until then. Your
+settings are kept.
+
 With Developer mode, the same from a terminal:
 
 ```sh
