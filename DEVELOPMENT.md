@@ -9,7 +9,8 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 | File | Purpose |
 |---|---|
 | `/usr/lib64/qt5/plugins/generic/libowlfish.so` | the plugin |
-| `/var/lib/environment/compositor/90-owlfish.conf` | `QT_QPA_GENERIC_PLUGINS=owlfish`, read by `lipstick.service` |
+| `/var/lib/environment/compositor/00-owlfish.conf` | `QT_QPA_GENERIC_PLUGINS=owlfish`, read by `lipstick.service`; written by `update-env`, not shipped (`%ghost`) |
+| `/usr/libexec/owlfish/update-env` | run by the RPM's `%post`: writes the file above unless the device sets the variable itself |
 | `/usr/share/jolla-settings/entries/owlfish.json` | registers the Settings page and the top menu shortcut |
 | `/usr/share/jolla-settings/pages/owlfish/*.qml` | Settings page and top menu shortcut |
 | `/usr/share/themes/sailfish-default/silica/z*/icons-monochrome/icon-m-owlfish.png` | icon, one per theme scale (source: `icons/icon-m-owlfish.svg`, render with `icons/render.sh`) |
@@ -19,6 +20,25 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   `-plugin` arguments, so no file of another package is touched. The plugin
   waits for the `LipstickCompositor` window and parents a `ColorFilterItem`
   to its content item with a very high `z`.
+- **Sharing the variable:** systemd reads those files sorted by name, and
+  the last file that sets a variable wins. Some ports set
+  `QT_QPA_GENERIC_PLUGINS` themselves (the PineTab2 loads its input
+  plugins that way), so Owlfish must not replace their value. On every
+  install and upgrade `config/update-env` computes the value the device
+  sets without Owlfish, the same way (ignoring `00-owlfish.conf` and 1.1.0's
+  `90-owlfish.conf`). Only if it is empty or already names `owlfish` does
+  it write `00-owlfish.conf`; otherwise it removes it and prints a warning,
+  and the installation still succeeds. Only `rpm` and `zypper` show that
+  warning; `pkcon`, Storeman and the GUI installer run the scriptlet in
+  PackageKit and hide its output, so the settings page is what tells users.
+  The `00-` name is read first, so a device file added later wins: Owlfish
+  becomes inactive instead of the device losing its plugins.
+- **Status:** the plugin registers `io.github.ccontino84.owlfish` on the
+  session bus, with `status()` (`active`, `starting`, `no-window`,
+  `crash-guard`), `version()` and `resetCrashGuard()`. The settings page
+  asks once when it opens and shows the running version under its title.
+  Without a reply it reads `00-owlfish.conf`: missing means "not supported
+  on this device", present means "restart the phone".
 - **Filter:** one full-screen quad with a public `QSGMaterial`. Its shader's
   `activate()` sets `glBlendFunc(GL_ZERO, GL_SRC_COLOR)` and `deactivate()`
   restores the renderer's premultiplied blending. It does not use the private
@@ -46,6 +66,7 @@ Source layout (`src/`):
 | `ambientcutoff.*`, `alscalibration.*` | bright-light hysteresis and debounce; mce's `AlsValueMultiplier` |
 | `settings.*` | dconf keys (mlite `MDConfItem`); environment variables in host builds |
 | `crashguard.*` | the unhealthy-start counter |
+| `statusservice.*` | the D-Bus status for the settings page |
 
 ### How the colour is computed
 
@@ -167,7 +188,8 @@ after the filter. They also cover the colour gains against redshift's table,
 tint and dimming combined, the schedule (window, transitions, only the
 colour), sunset and sunrise against USNO reference values, the time zone
 lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
-guard, and loading through `QGenericPluginFactory`, including a sun schedule
+guard, the D-Bus status, `update-env` against sample environment files,
+and loading through `QGenericPluginFactory`, including a sun schedule
 at fake polar coordinates (`OWLFISH_LOCATION_MANUAL=1 OWLFISH_LATITUDE=89.9`).
 
 Plugin options, for testing outside lipstick:
@@ -189,6 +211,8 @@ Close the Settings app if it was open, so it picks up the new page. Check:
 
 ```sh
 devel-su sh -c 'grep -l libowlfish /proc/[0-9]*/maps'   # must list only lipstick's pid
+dbus-send --session --print-reply --dest=io.github.ccontino84.owlfish \
+    /owlfish io.github.ccontino84.owlfish.status        # string "active"
 ```
 
 The plugin logs a line whenever a setting changes. Switch Owlfish in the top

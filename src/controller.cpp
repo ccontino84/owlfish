@@ -105,6 +105,22 @@ qreal OwlfishController::colourStrength(bool scheduled, const OwlfishSchedule &s
     return scheduled ? schedule.strength(now) : 1;
 }
 
+QString OwlfishController::status() const
+{
+    if (!m_active)
+        return QStringLiteral("crash-guard");
+    if (m_window)
+        return QStringLiteral("active");
+    if (m_findAttempts >= MaxFindAttempts)
+        return QStringLiteral("no-window");
+    return QStringLiteral("starting");
+}
+
+void OwlfishController::resetCrashGuard()
+{
+    m_guard.markHealthy();
+}
+
 void OwlfishController::findWindow()
 {
     if (m_window)

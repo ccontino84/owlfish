@@ -1,0 +1,51 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 ccontino84
+# SPDX-License-Identifier: LGPL-2.1-only
+#
+# Run by the RPM on every install and upgrade: creates 00-owlfish.conf, which
+# makes the home screen load Owlfish, unless the device's own configuration
+# already sets QT_QPA_GENERIC_PLUGINS. Owlfish then stays inactive instead of
+# taking the device's plugins away (a port's touch or keyboard input, for
+# example). Never fails the installation; exits 1 on a conflict.
+#
+#   update-env [directory, default /var/lib/environment/compositor]
+#
+# POSIX sh: RPM scriptlets may run in BusyBox.
+
+dir=${1:-/var/lib/environment/compositor}
+own=00-owlfish.conf
+
+# The value lipstick gets without Owlfish, the way systemd reads
+# EnvironmentFile=-.../*.conf: files sorted by name, the last assignment wins.
+# 90-owlfish.conf is the file of Owlfish 1.1.0 and earlier, which is still
+# there while an upgrade runs.
+value=
+source=
+for file in "$dir"/*.conf; do
+    [ -f "$file" ] || continue
+    case ${file##*/} in
+        "$own"|90-owlfish.conf) continue ;;
+    esac
+    pattern='^[[:space:]]*QT_QPA_GENERIC_PLUGINS[[:space:]]*='
+    grep -q "$pattern" "$file" || continue
+    value=$(sed -n "s/$pattern[[:space:]]*//p" "$file" | tail -n 1 \
+            | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")
+    source=$file
+done
+
+# Also accepts a device list that already names owlfish (a hand-made file)
+plugins=$(printf '%s' "$value" | tr 'A-Z' 'a-z')
+case ",$plugins," in
+    ,,|*,owlfish,*|*,owlfish:*)
+        # Older packages created the directory by shipping a file in it
+        mkdir -p "$dir" \
+            && printf 'QT_QPA_GENERIC_PLUGINS=owlfish\n' > "$dir/$own.new" \
+            && chmod 644 "$dir/$own.new" \
+            && mv -f "$dir/$own.new" "$dir/$own"
+        ;;
+    *)
+        rm -f "$dir/$own"
+        echo "owlfish: installed but inactive: $source sets QT_QPA_GENERIC_PLUGINS. Please report it at https://github.com/ccontino84/owlfish/issues"
+        exit 1
+        ;;
+esac

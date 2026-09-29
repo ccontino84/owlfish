@@ -36,6 +36,11 @@ public:
                                 QObject *parent = nullptr);
 
     bool isActive() const { return m_active; }
+    // For the settings page: "active", "starting" (still looking for the
+    // window), "no-window" or "crash-guard"
+    QString status() const;
+    // Lets the plugin try again at the next compositor start
+    void resetCrashGuard();
     ColorFilterItem *filterItem() const { return m_item; }
     AmbientCutoff *cutoff() const { return m_cutoff; }
     OwlfishSettings *settings() const { return m_settings; }

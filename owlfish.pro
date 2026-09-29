@@ -10,6 +10,13 @@ SUBDIRS = src
     tests.depends = src
 }
 
+# Writes the compositor environment file that loads the plugin; run by the
+# RPM's %post (see config/update-env)
+update_env.files = config/update-env
+update_env.path = /usr/libexec/owlfish
+update_env.CONFIG += executable
+INSTALLS += update_env
+
 # Settings app page and top menu shortcut (jolla-settings)
 settings_entries.files = settings/owlfish.json
 settings_entries.path = /usr/share/jolla-settings/entries
@@ -28,7 +35,7 @@ for(scale, $$list(z1.0 z1.25 z1.5 z1.5-large z1.75 z2.0 z2.5)) {
 
 OTHER_FILES += \
     rpm/owlfish.spec \
-    config/90-owlfish.conf \
+    config/update-env \
     settings/*.json \
     settings/*.qml \
     icons/*.svg \

@@ -11,3 +11,4 @@ include(../src/owlfish.pri)
 SOURCES += tst_owlfish.cpp
 
 DEFINES += OWLFISH_PLUGINS_DIR=\\\"$$OUT_PWD/../plugins\\\"
+DEFINES += OWLFISH_UPDATE_ENV=\\\"$$PWD/../config/update-env\\\"

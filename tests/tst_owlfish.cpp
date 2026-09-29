@@ -9,10 +9,14 @@
 #include "crashguard.h"
 #include "schedule.h"
 #include "settings.h"
+#include "statusservice.h"
 #include "sun.h"
 #include "timezonelocation.h"
 
+#include <QDBusInterface>
+#include <QDBusReply>
 #include <QGenericPluginFactory>
+#include <QProcess>
 #include <QQmlEngine>
 #include <QQuickItem>
 #include <QQuickView>
@@ -77,6 +81,11 @@ private slots:
     void timeZoneSystemData();
     void timeZoneLinks();
     void crashGuard();
+    void status();
+    void statusCrashGuard();
+    void statusOnDBus();
+    void updateEnv_data();
+    void updateEnv();
     void cutoffFirstReadingAppliesImmediately();
     void cutoffHysteresis();
     void cutoffThresholdChangeAppliesAtOnce();
@@ -658,6 +667,140 @@ void tst_Owlfish::crashGuard()
     guard.markHealthy();
     QCOMPARE(guard.unhealthyStarts(), 0);
     QVERIFY(guard.begin());
+}
+
+void tst_Owlfish::status()
+{
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(new OwlfishController(
+            "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts"))));
+    // Owned by the controller, as in the plugin
+    OwlfishStatusService *service = new OwlfishStatusService(controller.data());
+    QCOMPARE(service->status(), QStringLiteral("starting"));
+
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(service->status(), QStringLiteral("active"));
+}
+
+void tst_Owlfish::statusCrashGuard()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("unhealthy-starts"));
+    CrashGuard guard(path, 3);
+    for (int i = 0; i < 3; ++i)
+        QVERIFY(guard.begin());
+
+    QScopedPointer<OwlfishController> controller(new OwlfishController("QQuickView", path));
+    // Owned by the controller, as in the plugin
+    OwlfishStatusService *service = new OwlfishStatusService(controller.data());
+    QCOMPARE(service->status(), QStringLiteral("crash-guard"));
+
+    // Takes effect at the next start
+    service->resetCrashGuard();
+    QCOMPARE(guard.unhealthyStarts(), 0);
+    QCOMPARE(service->status(), QStringLiteral("crash-guard"));
+}
+
+void tst_Owlfish::statusOnDBus()
+{
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected())
+        QSKIP("No session bus");
+
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(new OwlfishController(
+            "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts"))));
+    OwlfishStatusService *service = new OwlfishStatusService(controller.data());
+    QVERIFY(service->registerOn(bus));
+
+    // What the settings page calls
+    QDBusInterface remote(QLatin1String(OwlfishStatusService::ServiceName),
+                          QLatin1String(OwlfishStatusService::ObjectPath),
+                          QStringLiteral("io.github.ccontino84.owlfish"), bus);
+    QDBusReply<QString> reply = remote.call(QStringLiteral("status"));
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    QCOMPARE(reply.value(), QStringLiteral("starting"));
+    reply = remote.call(QStringLiteral("version"));
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    QCOMPARE(reply.value(), QStringLiteral(OWLFISH_VERSION));
+    QVERIFY(QRegularExpression(QStringLiteral("^\\d+\\.\\d+\\.\\d+")).match(reply.value()).hasMatch());
+    QVERIFY(remote.call(QStringLiteral("resetCrashGuard")).type() == QDBusMessage::ReplyMessage);
+
+    bus.unregisterService(QLatin1String(OwlfishStatusService::ServiceName));
+}
+
+void tst_Owlfish::updateEnv_data()
+{
+    // Files in the compositor environment directory before the install, as
+    // name=content pairs separated by "|"; whether Owlfish gets its file
+    QTest::addColumn<QString>("files");
+    QTest::addColumn<bool>("active");
+
+    QTest::newRow("empty") << QString() << true;
+    QTest::newRow("other variables")
+            << "10-qt.conf=# Qt\nQT_QPA_PLATFORM=wayland\nQT_SCALE_FACTOR=2\n" << true;
+    QTest::newRow("port plugins")
+            << "50-pinetab.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch,evdevkeyboard\n" << false;
+    QTest::newRow("quoted, spaces")
+            << "50-port.conf=  QT_QPA_GENERIC_PLUGINS = \"evdevtouch\"  \n" << false;
+    QTest::newRow("commented out")
+            << "50-port.conf=#QT_QPA_GENERIC_PLUGINS=evdevtouch\n" << true;
+    QTest::newRow("cleared by a later file")
+            << "50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\n|60-fix.conf=QT_QPA_GENERIC_PLUGINS=\n" << true;
+    QTest::newRow("last assignment in a file")
+            << "50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\nQT_QPA_GENERIC_PLUGINS=\n" << true;
+    // A hand-made file sorting last that adds Owlfish to the device's list
+    QTest::newRow("list with owlfish")
+            << "50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\n"
+               "|zz-owlfish.conf=QT_QPA_GENERIC_PLUGINS='evdevtouch,Owlfish:class=X'\n" << true;
+    QTest::newRow("similar name")
+            << "50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch,owlfishy\n" << false;
+    // During an upgrade from 1.1.0 its file is still there; a device file
+    // before it still counts
+    QTest::newRow("upgrade")
+            << "50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\n"
+               "|90-owlfish.conf=QT_QPA_GENERIC_PLUGINS=owlfish\n" << false;
+    QTest::newRow("upgrade, no conflict")
+            << "90-owlfish.conf=QT_QPA_GENERIC_PLUGINS=owlfish\n" << true;
+    // Reinstalling after the device added its own list
+    QTest::newRow("own file removed")
+            << "00-owlfish.conf=QT_QPA_GENERIC_PLUGINS=owlfish\n"
+               "|50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\n" << false;
+}
+
+void tst_Owlfish::updateEnv()
+{
+    QFETCH(QString, files);
+    QFETCH(bool, active);
+
+    QTemporaryDir dir;
+    if (!files.isEmpty()) {
+        for (const QString &entry : files.split(QLatin1Char('|'))) {
+            const int separator = entry.indexOf(QLatin1Char('='));
+            QFile file(dir.filePath(entry.left(separator)));
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(entry.mid(separator + 1).toUtf8());
+        }
+    }
+
+    QProcess process;
+    process.start(QStringLiteral("sh"), { QStringLiteral(OWLFISH_UPDATE_ENV), dir.path() });
+    QVERIFY(process.waitForFinished());
+    QCOMPARE(process.exitCode(), active ? 0 : 1);
+
+    QFile own(dir.filePath(QStringLiteral("00-owlfish.conf")));
+    QCOMPARE(own.exists(), active);
+    if (active) {
+        QVERIFY(own.open(QIODevice::ReadOnly));
+        QCOMPARE(own.readAll(), QByteArray("QT_QPA_GENERIC_PLUGINS=owlfish\n"));
+        QVERIFY(process.readAllStandardOutput().isEmpty());
+    } else {
+        const QString message = QString::fromUtf8(process.readAllStandardOutput());
+        QVERIFY2(message.startsWith(QStringLiteral("owlfish: installed but inactive: ")), qPrintable(message));
+        QVERIFY2(message.contains(QStringLiteral("50-port")) || message.contains(QStringLiteral("50-pinetab")),
+                 qPrintable(message));
+    }
 }
 
 void tst_Owlfish::cutoffFirstReadingAppliesImmediately()

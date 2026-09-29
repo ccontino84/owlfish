@@ -3,12 +3,15 @@
 
 #include "controller.h"
 #include "logging.h"
+#include "statusservice.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QGenericPlugin>
+#include <QTimer>
 
-// Loaded through QT_QPA_GENERIC_PLUGINS=owlfish (see 90-owlfish.conf).
+// Loaded through QT_QPA_GENERIC_PLUGINS=owlfish (00-owlfish.conf, written by
+// config/update-env when the package is installed).
 //
 // An optional specification tunes where the filter attaches, for testing:
 //   owlfish:class=<QQuickWindow subclass>:process=<executable name or *>
@@ -48,7 +51,15 @@ public:
             return new QObject;
         }
 
-        return new OwlfishController(windowClass);
+        OwlfishController *controller = new OwlfishController(windowClass);
+        // Also when the crash guard has tripped, so that the settings page
+        // can say so. Created during QGuiApplication's setup; register once
+        // the event loop runs.
+        OwlfishStatusService *service = new OwlfishStatusService(controller);
+        QTimer::singleShot(0, service, [service]() {
+            service->registerOn(QDBusConnection::sessionBus());
+        });
+        return controller;
     }
 };
 

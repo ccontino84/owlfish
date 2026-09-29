@@ -56,64 +56,80 @@ systemctl --user restart lipstick     # restarts the home screen; closes open ap
 
 ## Using it
 
-**Settings > Owlfish.** Every option is always shown in the same place;
-options that do not apply are greyed out.
+**Settings > Owlfish.** Options that do not apply are greyed out, not
+hidden.
 
 - **Enabled**: the master switch, also available as the top menu shortcut
   (tap to toggle, long press to open the page).
 - **Colour temperature**
   - **Warmth**: 6500 K (no tint) to 1900 K (no blue), default 4500 K.
-  - **When**: *All the time*; *Fixed times*, warm only between the start
-    and end times (default 21:00-07:00); or *Sunset to sunrise*. Neutral the
-    rest of the day. **Gradual change** (off, 30 min, 1 h, 2 h) warms up from
-    the start time or sunset and is back to neutral at the end time or
-    sunrise. A line below says what the colour is doing now.
-  - **Set location manually** (for sunset to sunrise): see below.
+  - **When**: *All the time*, *Fixed times* (default 21:00-07:00) or
+    *Sunset to sunrise*; neutral the rest of the day. **Gradual change**
+    (off, 30 min, 1 h, 2 h) warms up from the start and is back to neutral
+    at the end.
 - **Dimming**
   - **Darker than the current brightness**: off, or 5-75 %.
-  - **Only in the dark**: above the chosen light level the dimming fades out,
-    and it comes back below 75 % of that level. A meter on the same scale
-    shows the light level now.
+  - **Only in the dark**: the dimming fades out above the chosen light
+    level and comes back below 75 % of it. A meter shows the light level
+    now.
 
-The schedule only affects the colour and the light sensor only the dimming,
-so with both set you get: warm at night, darker in the dark.
+The schedule only affects the colour and the light sensor only the dimming:
+warm at night, darker in the dark.
 
 ### Sunset to sunrise
 
-Owlfish calculates today's sunset and sunrise on the phone, for the city of
-your time zone (for example Berlin for Europe/Berlin), and the page shows
-them. If you travel to another time zone, it follows. It needs no location
-service and no network.
+Owlfish calculates the times on the phone for your time zone's city (Berlin
+for Europe/Berlin, for example), without location services or network, and
+follows you to other time zones. The page shows today's times.
 
-The time zone's city can be some way from you. Each degree of longitude
-(about 70 km in central Europe) moves both times by 4 minutes; latitude
-changes the length of the night, more so in summer and further north:
+The city may be some way from you. Longitude moves both times by 4 minutes
+per degree (about 70 km in central Europe) all year. Latitude changes the
+length of the night, little around the equinoxes but most at the
+solstices: Munich's and Kiel's nights (both on Berlin time) then differ by
+about an hour. If the times are too far off, turn on **Set location
+manually** and paste your coordinates from a map app, e.g. `60.17, 24.94`.
 
-- In Aachen the sun sets and rises about 29 min later than in Berlin; in
-  Milan about 13 min later than in Rome.
-- Munich's and Kiel's nights (both Berlin time) differ by up to 30-40 min.
-- In large time zones (China, India, the US) the times can be 1-3 h off at
-  the edges, and northern Finland and Helsinki share one time zone.
+Under the midnight sun the colour stays neutral; in polar night it stays
+warm all day. Beyond 60° north or south the times are less precise, and
+fixed times give a steadier routine.
 
-For most of Europe that is under half an hour, which a gradual change of an
-hour largely hides. If it is too far off, turn on **Set location manually**
-and type or paste your coordinates, e.g. `60.17, 24.94` as copied from a
-map app or website. Switching it off goes back to the time zone and keeps
-what you typed.
+## If something goes wrong
 
-Under the midnight sun the colour stays neutral, and in polar night it
-stays warm all day. North or south of 60° the times are approximate (the
-sun crosses the horizon at a shallow angle), and beyond 72° they can be off
-by up to 10 minutes; fixed times give a steadier routine there.
+The settings page shows a warning at the top when Owlfish is not running.
+
+- **"Not supported on this device."** Your device's own configuration
+  loads Qt plugins through the same setting as Owlfish
+  (`QT_QPA_GENERIC_PLUGINS`). Owlfish gives way rather than switch off
+  your device's plugins, so it does nothing. Please report it in the
+  [issues](https://github.com/ccontino84/owlfish/issues) with your device's
+  name.
+- **"Not running. Restart the phone to start it."** It was installed or
+  updated since the last restart.
+- **"Turned off after the home screen failed to start."** The crash guard
+  (see below) has turned Owlfish off. Tap **Reset** and restart the phone to
+  try again.
+
+**Touch, mouse or keyboard stop working after installing or a system
+update.** This is unlikely: the installer checks for the conflict above.
+It can only happen if an update later adds a device file that is read
+before Owlfish's. To recover over SSH (USB or Wi-Fi, with Developer mode
+and a password set), remove Owlfish's file or the whole package, then
+reboot:
+
+```sh
+devel-su rm /var/lib/environment/compositor/00-owlfish.conf   # or: devel-su rpm -e owlfish
+devel-su reboot
+```
+
+Without SSH, use your device's recovery mode, if it has one, to delete the
+same file.
 
 ## Known issues
 
-- **Wrong icon on a newly added top menu shortcut** (seen on Sailfish OS
-  5.2.0.17): right after adding "Owlfish" in Settings > Top menu, the top
-  menu may show the shortcut with another switch's icon, e.g. *Do not
-  disturb*. Removing and adding the shortcut again fixes it; restarting the
-  phone probably does too. This happens in the system's top menu: Owlfish
-  declares its shortcut the same way as the built-in ones.
+- **Wrong icon on a newly added top menu shortcut** (Sailfish OS 5.2.0.17):
+  the top menu may show another switch's icon, e.g. *Do not disturb*.
+  Removing and adding the shortcut again fixes it. The bug is in the
+  system's top menu.
 
 ## Uninstall
 
@@ -126,33 +142,24 @@ systemctl --user restart lipstick
 
 Settings stay in dconf; remove them with `dconf reset -f /apps/owlfish/`.
 
-**If the home screen does not come up** after installing, Owlfish turns
-itself off after three failed starts (see Safety). To remove it by hand over
-SSH:
-
-```sh
-devel-su rm /var/lib/environment/compositor/90-owlfish.conf
-systemctl --user restart lipstick
-```
-
 ## Safety and privacy
 
-Owlfish is a plugin that the home screen (lipstick) loads at startup. It does
-not modify any system file: it only adds its own files, including one
-environment file that tells lipstick to load it.
+Owlfish is a plugin that the home screen (lipstick) loads at startup. It
+modifies no system file: it adds its own files, including an environment
+file that tells lipstick to load it, which the installer only creates if
+the device doesn't use that setting itself.
 
 - **Crash guard:** each home screen start counts as unhealthy until the
   filter has run for 30 s. After 3 unhealthy starts in a row Owlfish stays
-  inactive. Re-enable it with `rm ~/.cache/owlfish/unhealthy-starts`.
-- **Never too dark:** dimming stops at 75 %, so the screen stays readable
-  enough to turn it off again.
+  off until you tap **Reset** on its settings page (or run
+  `rm ~/.cache/owlfish/unhealthy-starts`).
+- **Never too dark:** dimming stops at 75 %, so the screen stays readable.
 - **Only in the home screen:** the plugin does nothing in any other process.
 - **No cost when off:** with no tint and no dimming the filter is removed.
-- **Privacy:** the light sensor is only read while dimming "only in the
-  dark" is in use (and the settings page shows the current level while it
-  is open). Sunset and sunrise come from the time zone setting or the
-  coordinates you type; Owlfish never uses the location service. Nothing
-  leaves the phone; there is no network access.
+- **Privacy:** the light sensor is only read while "only in the dark" is in
+  use, and by the settings page while it is open. Sunset and sunrise come
+  from the time zone or the coordinates you type, never from location
+  services. Nothing leaves the phone.
 
 ## Development
 

@@ -4,6 +4,7 @@
 import QtQuick 2.0
 import Sailfish.Silica 1.0
 import Nemo.Configuration 1.0
+import Nemo.DBus 2.0
 import QtSensors 5.0
 
 // Every option is always shown in the same place; options that do not apply
@@ -82,6 +83,61 @@ Page {
     // Ambient light for the meter, smoothed so that it does not jitter;
     // -1 before the first reading
     property real ambientLux: -1
+
+    // Whether the plugin runs in the home screen, checked once when the page
+    // opens: OwlfishController::status() ("active", "starting", "no-window",
+    // "crash-guard"), or without a reply "not-running" or "unsupported"; empty
+    // until known
+    property string pluginStatus: ""
+    // Of the running plugin; empty when it does not reply
+    property string pluginVersion: ""
+    readonly property string pluginProblem: {
+        switch (pluginStatus) {
+        case "unsupported":
+            return "Not supported on this device."
+        case "not-running":
+            return "Not running. Restart the phone to start it."
+        case "crash-guard":
+            return "Turned off after the home screen failed to start."
+        case "no-window":
+            return "Couldn't attach to the home screen."
+        }
+        return ""
+    }
+
+    // No reply: the package only writes the environment file that loads the
+    // plugin when the device does not load plugins of its own the same way
+    // (config/update-env)
+    function checkEnvironmentFile() {
+        var request = new XMLHttpRequest()
+        request.onreadystatechange = function() {
+            if (request.readyState === XMLHttpRequest.DONE) {
+                page.pluginStatus = request.responseText.indexOf("owlfish") >= 0
+                        ? "not-running" : "unsupported"
+            }
+        }
+        request.open("GET", "file:///var/lib/environment/compositor/00-owlfish.conf")
+        request.send()
+    }
+
+    Component.onCompleted: {
+        plugin.typedCall("status", [],
+                         function(status) {
+                             page.pluginStatus = status
+                             plugin.typedCall("version", [],
+                                              function(version) { page.pluginVersion = version })
+                         },
+                         function() { page.checkEnvironmentFile() })
+    }
+
+    DBusInterface {
+        id: plugin
+
+        // OwlfishStatusService, on the session bus
+        service: "io.github.ccontino84.owlfish"
+        path: "/owlfish"
+        iface: "io.github.ccontino84.owlfish"
+    }
 
     function currentMinutes() {
         var now = new Date()
@@ -305,6 +361,35 @@ Page {
 
             PageHeader {
                 title: "Owlfish"
+                description: page.pluginVersion !== "" ? "Version " + page.pluginVersion : ""
+            }
+
+            // Only when there is a problem; the settings stay editable
+            Column {
+                visible: page.pluginProblem !== ""
+                width: parent.width
+                spacing: Theme.paddingMedium
+
+                Label {
+                    x: Theme.horizontalPageMargin
+                    width: parent.width - 2 * Theme.horizontalPageMargin
+                    wrapMode: Text.Wrap
+                    color: Theme.highlightColor
+                    text: page.pluginProblem
+                }
+
+                Button {
+                    visible: page.pluginStatus === "crash-guard"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: "Reset"
+                    onClicked: plugin.typedCall("resetCrashGuard", [],
+                                                function() { page.pluginStatus = "not-running" })
+                }
+
+                Item {
+                    width: 1
+                    height: Theme.paddingMedium
+                }
             }
 
             TextSwitch {

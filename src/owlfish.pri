@@ -3,7 +3,7 @@
 
 INCLUDEPATH += $$PWD
 
-# mce display state, for the schedule
+# mce display state, for the schedule; the status for the settings page
 QT += dbus
 
 HEADERS += \
@@ -17,6 +17,7 @@ HEADERS += \
     $$PWD/logging.h \
     $$PWD/schedule.h \
     $$PWD/settings.h \
+    $$PWD/statusservice.h \
     $$PWD/sun.h \
     $$PWD/timezonelocation.h
 
@@ -31,8 +32,17 @@ SOURCES += \
     $$PWD/logging.cpp \
     $$PWD/schedule.cpp \
     $$PWD/settings.cpp \
+    $$PWD/statusservice.cpp \
     $$PWD/sun.cpp \
     $$PWD/timezonelocation.cpp
+
+# The package version, for the settings page; the spec is the one source
+SPEC_LINES = $$cat($$PWD/../rpm/owlfish.spec, lines)
+for(line, SPEC_LINES) {
+    contains(line, "^Version:.*"): OWLFISH_VERSION = $$section(line, " ", -1)
+}
+isEmpty(OWLFISH_VERSION): error("No Version in rpm/owlfish.spec")
+DEFINES += OWLFISH_VERSION=\\\"$$OWLFISH_VERSION\\\"
 
 # On Sailfish OS settings come from dconf via mlite5; host builds fall back
 # to environment variables (see settings.cpp)

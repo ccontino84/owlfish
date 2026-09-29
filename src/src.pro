@@ -18,7 +18,4 @@ DESTDIR = $$OUT_PWD/../plugins/generic
 
 target.path = $$[QT_INSTALL_PLUGINS]/generic
 
-envconf.files = ../config/90-owlfish.conf
-envconf.path = /var/lib/environment/compositor
-
-INSTALLS += target envconf
+INSTALLS += target
