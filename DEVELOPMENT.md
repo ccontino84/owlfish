@@ -9,8 +9,8 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 | File | Purpose |
 |---|---|
 | `/usr/lib64/qt5/plugins/generic/libowlfish.so` | the plugin |
-| `/var/lib/environment/compositor/00-owlfish.conf` | `QT_QPA_GENERIC_PLUGINS=owlfish`, read by `lipstick.service`; written by `update-env`, not shipped (`%ghost`) |
-| `/usr/libexec/owlfish/update-env` | run by the RPM's `%post`: writes the file above unless the device sets the variable itself |
+| `/var/lib/environment/compositor/00-owlfish.conf` | `QT_QPA_GENERIC_PLUGINS=owlfish`, read by `lipstick.service`; not shipped (`%ghost`) |
+| `/usr/libexec/owlfish/update-env` | writes the file above from the RPM's `%post` (see below) |
 | `/usr/share/jolla-settings/entries/owlfish.json` | registers the Settings page and the top menu shortcut |
 | `/usr/share/jolla-settings/pages/owlfish/*.qml` | Settings page and top menu shortcut |
 | `/usr/share/themes/sailfish-default/silica/z*/icons-monochrome/icon-m-owlfish.png` | icon, one per theme scale (source: `icons/icon-m-owlfish.svg`, render with `icons/render.sh`) |
@@ -27,18 +27,19 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   install and upgrade `config/update-env` computes the value the device
   sets without Owlfish, the same way (ignoring `00-owlfish.conf` and 1.1.0's
   `90-owlfish.conf`). Only if it is empty or already names `owlfish` does
-  it write `00-owlfish.conf`; otherwise it removes it and prints a warning,
-  and the installation still succeeds. Only `rpm` and `zypper` show that
-  warning; `pkcon`, Storeman and the GUI installer run the scriptlet in
-  PackageKit and hide its output, so the settings page is what tells users.
-  The `00-` name is read first, so a device file added later wins: Owlfish
-  becomes inactive instead of the device losing its plugins.
+  it write `00-owlfish.conf`; otherwise it removes it and prints a warning
+  (hidden by `pkcon` and other PackageKit-based installers; `rpm` and
+  `zypper` show it), and the installation still succeeds. The `00-` name is
+  read first, so a device file added later wins: Owlfish becomes inactive
+  instead of the device losing its plugins.
 - **Status:** the plugin registers `io.github.ccontino84.owlfish` on the
   session bus, with `status()` (`active`, `starting`, `no-window`,
   `crash-guard`), `version()` and `resetCrashGuard()`. The settings page
   asks once when it opens and shows the running version under its title.
   Without a reply it reads `00-owlfish.conf`: missing means "not supported
-  on this device", present means "restart the phone".
+  on this device", present means "restart the phone". A device file added
+  after installation also looks like the latter; reinstalling runs the
+  check again.
 - **Filter:** one full-screen quad with a public `QSGMaterial`. Its shader's
   `activate()` sets `glBlendFunc(GL_ZERO, GL_SRC_COLOR)` and `deactivate()`
   restores the renderer's premultiplied blending. It does not use the private

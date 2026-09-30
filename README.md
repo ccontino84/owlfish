@@ -104,17 +104,17 @@ The settings page shows a warning at the top when Owlfish is not running.
   [issues](https://github.com/ccontino84/owlfish/issues) with your device's
   name.
 - **"Not running. Restart the phone to start it."** It was installed or
-  updated since the last restart.
+  updated since the last restart. If it stays after a restart, a system
+  update may have added a conflicting setting: reinstall Owlfish to check
+  again.
 - **"Turned off after the home screen failed to start."** The crash guard
   (see below) has turned Owlfish off. Tap **Reset** and restart the phone to
   try again.
 
 **Touch, mouse or keyboard stop working after installing or a system
-update.** This is unlikely: the installer checks for the conflict above.
-It can only happen if an update later adds a device file that is read
-before Owlfish's. To recover over SSH (USB or Wi-Fi, with Developer mode
-and a password set), remove Owlfish's file or the whole package, then
-reboot:
+update.** Unlikely, as the installer checks for the conflict above: only an
+update that later adds a device file read before Owlfish's can cause it.
+To recover over SSH (USB or Wi-Fi, with Developer mode and a password set):
 
 ```sh
 devel-su rm /var/lib/environment/compositor/00-owlfish.conf   # or: devel-su rpm -e owlfish
@@ -145,13 +145,12 @@ Settings stay in dconf; remove them with `dconf reset -f /apps/owlfish/`.
 ## Safety and privacy
 
 Owlfish is a plugin that the home screen (lipstick) loads at startup. It
-modifies no system file: it adds its own files, including an environment
-file that tells lipstick to load it, which the installer only creates if
-the device doesn't use that setting itself.
+modifies no system file: it only adds its own, including an environment
+file that tells lipstick to load it.
 
 - **Crash guard:** each home screen start counts as unhealthy until the
   filter has run for 30 s. After 3 unhealthy starts in a row Owlfish stays
-  off until you tap **Reset** on its settings page (or run
+  off until reset on its settings page (or with
   `rm ~/.cache/owlfish/unhealthy-starts`).
 - **Never too dark:** dimming stops at 75 %, so the screen stays readable.
 - **Only in the home screen:** the plugin does nothing in any other process.
