@@ -48,7 +48,7 @@ Links:
 %autosetup -n %{name}-%{version}
 
 %build
-%qmake5 CONFIG+=notests
+%qmake5 CONFIG+=notests OWLFISH_VERSION=%{version}
 make %{?_smp_mflags}
 
 %install

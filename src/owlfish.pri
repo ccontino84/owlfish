@@ -36,12 +36,13 @@ SOURCES += \
     $$PWD/sun.cpp \
     $$PWD/timezonelocation.cpp
 
-# The package version, for the settings page; the spec is the one source
-SPEC_LINES = $$cat($$PWD/../rpm/owlfish.spec, lines)
-for(line, SPEC_LINES) {
-    contains(line, "^Version:.*"): OWLFISH_VERSION = $$section(line, " ", -1)
+isEmpty(OWLFISH_VERSION) {
+    SPEC_LINES = $$cat($$PWD/../rpm/owlfish.spec, lines)
+    for(line, SPEC_LINES) {
+        contains(line, "^Version:.*"): OWLFISH_VERSION = $$section(line, " ", -1)
+    }
+    isEmpty(OWLFISH_VERSION): error("No Version in rpm/owlfish.spec")
 }
-isEmpty(OWLFISH_VERSION): error("No Version in rpm/owlfish.spec")
 DEFINES += OWLFISH_VERSION=\\\"$$OWLFISH_VERSION\\\"
 
 # On Sailfish OS settings come from dconf via mlite5; host builds fall back
