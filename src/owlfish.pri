@@ -45,13 +45,18 @@ SOURCES += \
 # The package version, for the settings page; the spec is the one source.
 # It goes into a generated header, rewritten only when it changes, so that
 # the files using it are rebuilt; the spec is a dependency of the Makefile, so
-# qmake runs again when Version is raised.
-SPEC_LINES = $$cat($$PWD/../rpm/owlfish.spec, lines)
-for(line, SPEC_LINES) {
-    contains(line, "^Version:.*"): OWLFISH_VERSION = $$section(line, " ", -1)
+# qmake runs again when Version is raised. Where the spec is not next to the
+# sources (OBS's tar_git moves rpm/ away), the spec passes the version as
+# OWLFISH_VERSION; those builds always start clean.
+SPEC_FILE = $$PWD/../rpm/owlfish.spec
+exists($$SPEC_FILE) {
+    SPEC_LINES = $$cat($$SPEC_FILE, lines)
+    for(line, SPEC_LINES) {
+        contains(line, "^Version:.*"): OWLFISH_VERSION = $$section(line, " ", -1)
+    }
+    QMAKE_INTERNAL_INCLUDED_FILES += $$SPEC_FILE
 }
-isEmpty(OWLFISH_VERSION): error("No Version in rpm/owlfish.spec")
-QMAKE_INTERNAL_INCLUDED_FILES += $$PWD/../rpm/owlfish.spec
+isEmpty(OWLFISH_VERSION): error("No Version in rpm/owlfish.spec, and no OWLFISH_VERSION given")
 # In a subdirectory of the build directory: qmake searches the sources
 # first, where an in-source build's copy would shadow an out-of-source one
 VERSION_HEADER = $$OUT_PWD/generated/owlfish_version.h
