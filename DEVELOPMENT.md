@@ -320,3 +320,9 @@ ci/build-rpm.sh aarch64      # or armv7hl; RPM in out/ (the image is about 3 GB)
 
 The SDK's package check reports a missing `%changelog` and does not know
 the SPDX name `LGPL-2.1-only`; neither affects installing the package.
+
+SailfishOS:Chum builds from a tag: its OBS package points at `v<Version>`
+through `tar_git`, which takes the version from the tag and leaves `rpm/`
+out of the sources (hence `OWLFISH_VERSION` in the spec's `%build`). The
+package in `sailfishos:chum:testing` is moved to the new tag by its
+maintainer after each release.
