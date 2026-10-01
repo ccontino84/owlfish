@@ -19,8 +19,12 @@ wash out dark areas the way an overlay app does.
 
 | Device | Sailfish OS |
 |---|---|
-| Jolla Phone (2026) | 5.2.0.17 |
-| Sony Xperia 10 III | 5.1.0.11 |
+| Jolla Phone (2026) | 5.2 |
+| Sony Xperia 10 III | 5.1 |
+
+On the Jolla Phone the display hardware applies the filter, so animations
+stay as smooth as without it, and screenshots don't show the tint. Other
+devices draw it with the graphics processor, and screenshots include it.
 
 Other devices with Sailfish OS 5.x are likely to work, but have not been
 tried yet. Reports are welcome in the
@@ -71,7 +75,8 @@ hidden.
   - **Darker than the current brightness**: off, or 5-75 %.
   - **Only in the dark**: the dimming fades out above the chosen light
     level and comes back below 75 % of it. A meter shows the light level
-    now.
+    now. The scale ends at the most your phone's light sensor can measure
+    (on the Jolla Phone about 2200 lux).
 
 The schedule only affects the colour and the light sensor only the dimming:
 warm at night, darker in the dark.
@@ -96,6 +101,8 @@ fixed times give a steadier routine.
 ## If something goes wrong
 
 The settings page shows a warning at the top when Owlfish is not running.
+When you report a problem, double-tap the title of the settings page, tap
+**Copy** and paste the text into the report.
 
 - **"Not supported on this device."** Your device's own configuration
   loads Qt plugins through the same setting as Owlfish
@@ -110,6 +117,10 @@ The settings page shows a warning at the top when Owlfish is not running.
 - **"Turned off after the home screen failed to start."** The crash guard
   (see below) has turned Owlfish off. Tap **Reset** and restart the phone to
   try again.
+
+**The screen stays tinted or dim although Owlfish is off or uninstalled**
+(Jolla Phone). The display hardware keeps the filter if the home screen
+crashes. Restart the phone to clear it.
 
 **Touch, mouse or keyboard stop working after installing or a system
 update.** Unlikely, as the installer checks for the conflict above: only an
@@ -126,7 +137,7 @@ same file.
 
 ## Known issues
 
-- **Wrong icon on a newly added top menu shortcut** (Sailfish OS 5.2.0.17):
+- **Wrong icon on a newly added top menu shortcut** (Sailfish OS 5.2):
   the top menu may show another switch's icon, e.g. *Do not disturb*.
   Removing and adding the shortcut again fixes it. The bug is in the
   system's top menu.

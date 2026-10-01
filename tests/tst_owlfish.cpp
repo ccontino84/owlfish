@@ -4,9 +4,12 @@
 #include "alscalibration.h"
 #include "ambientcutoff.h"
 #include "colorfilteritem.h"
+#include "colormatrix.h"
 #include "colortemperature.h"
 #include "controller.h"
 #include "crashguard.h"
+#include <owlfish_version.h>
+#include "pqdisplay.h"
 #include "schedule.h"
 #include "settings.h"
 #include "statusservice.h"
@@ -14,6 +17,8 @@
 #include "timezonelocation.h"
 
 #include <QDBusInterface>
+#include <QDBusMetaType>
+#include <QDBusPendingCall>
 #include <QDBusReply>
 #include <QGenericPluginFactory>
 #include <QProcess>
@@ -48,7 +53,141 @@ const QPoint Grey(125, 75);
 const QPoint Orange(175, 75);
 const QPoint Above(25, 25);
 
+// What a FakePq was asked to do; outlives the controller that owns the fake
+struct PqLog
+{
+    int connects = 0;
+    // Every matrix and gain call, including the ones that failed
+    int attempts = 0;
+    // Calls from this attempt on fail; -1 never
+    int failFrom = -1;
+    QVector<QVector<int>> matrices;
+    QVector<QVector<int>> gains;
+};
+
+class FakePq : public PqDisplay::Backend
+{
+public:
+    FakePq(PqLog *log, bool found = true, int version = 7)
+        : m_log(log), m_found(found), m_version(version) {}
+
+    bool connect(QString *error) override
+    {
+        ++m_log->connects;
+        if (!m_found)
+            *error = QStringLiteral("no service");
+        return m_found;
+    }
+    int interfaceVersion() override { return m_version; }
+    bool setColorMatrix3x3(const int values[9], QString *error) override
+    {
+        return record(&m_log->matrices, values, 9, error);
+    }
+    bool setRgbGain(const int values[3], QString *error) override
+    {
+        return record(&m_log->gains, values, 3, error);
+    }
+
+private:
+    bool record(QVector<QVector<int>> *calls, const int *values, int count, QString *error)
+    {
+        if (m_log->failFrom >= 0 && m_log->attempts++ >= m_log->failFrom) {
+            *error = QStringLiteral("fake failure");
+            return false;
+        }
+        if (m_log->failFrom < 0)
+            ++m_log->attempts;
+        QVector<int> call;
+        for (int i = 0; i < count; ++i)
+            call << values[i];
+        calls->append(call);
+        return true;
+    }
+
+    PqLog *m_log;
+    bool m_found;
+    int m_version;
+};
+
+const QVector<int> PqIdentity = { 2048, 0, 0, 0, 2048, 0, 0, 0, 2048 };
+const QVector<int> PqNeutralGain = { 2048, 2048, 2048 };
+
+QVector<int> pqMatrixFor(const QVector3D &gain)
+{
+    int values[9];
+    PqDisplay::toFixed(ColorMatrix::withGain(ColorMatrix::identity(), gain), values);
+    QVector<int> matrix;
+    for (int value : values)
+        matrix << value;
+    return matrix;
 }
+
+}
+
+// sensorfw's TimedUnsigned, as its light sensor sends it on D-Bus: (tu)
+struct TimedLux
+{
+    qulonglong timestamp;
+    uint value;
+};
+Q_DECLARE_METATYPE(TimedLux)
+
+QDBusArgument &operator<<(QDBusArgument &argument, const TimedLux &lux)
+{
+    argument.beginStructure();
+    argument << lux.timestamp << lux.value;
+    argument.endStructure();
+    return argument;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &argument, TimedLux &lux)
+{
+    argument.beginStructure();
+    argument >> lux.timestamp >> lux.value;
+    argument.endStructure();
+    return argument;
+}
+
+// sensorfw's DataRange on D-Bus: (min, max, resolution)
+struct SensorRange
+{
+    double min;
+    double max;
+    double resolution;
+};
+Q_DECLARE_METATYPE(SensorRange)
+Q_DECLARE_METATYPE(QList<SensorRange>)
+
+QDBusArgument &operator<<(QDBusArgument &argument, const SensorRange &range)
+{
+    argument.beginStructure();
+    argument << range.min << range.max << range.resolution;
+    argument.endStructure();
+    return argument;
+}
+
+const QDBusArgument &operator>>(const QDBusArgument &argument, SensorRange &range)
+{
+    argument.beginStructure();
+    argument >> range.min >> range.max >> range.resolution;
+    argument.endStructure();
+    return argument;
+}
+
+// Stands in for com.nokia.SensorService /SensorManager/alssensor
+class FakeAlsSensor : public QObject
+{
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "local.ALSSensor")
+
+public slots:
+    TimedLux lux() const { return TimedLux { 12345, 800 }; }
+    // As on the Jolla Phone
+    QList<SensorRange> getAvailableDataRanges() const { return { SensorRange { 0, 65535, 1 } }; }
+    QList<SensorRange> noRanges() const { return {}; }
+    // Not the shape sensorfw sends
+    uint plainLux() const { return 800; }
+};
 
 class tst_Owlfish : public QObject
 {
@@ -84,6 +223,19 @@ private slots:
     void status();
     void statusCrashGuard();
     void statusOnDBus();
+    void linearGain();
+    void pqFixedPoint();
+    void pqDeviceId();
+    void pqOpen();
+    void pqWithoutLibgbinder();
+    void rendererSelection_data();
+    void rendererSelection();
+    void rendererPqDrawsNothing();
+    void rendererHandover();
+    void rendererMasterSwitch();
+    void rendererFallback();
+    void rendererResetOnQuit();
+    void rendererCrashGuard();
     void updateEnv_data();
     void updateEnv();
     void cutoffFirstReadingAppliesImmediately();
@@ -91,6 +243,13 @@ private slots:
     void cutoffThresholdChangeAppliesAtOnce();
     void cutoffDebounce();
     void cutoffReset();
+    void cutoffInitialReadingAppliesImmediately();
+    void cutoffReadingReplacesInitialReading();
+    void cutoffInitialReadingAfterReadingIgnored();
+    void cutoffInitialReadingAfterReset();
+    void cutoffSaturatedCountsAsBright();
+    void cutoffMaximumAppliesToLastReading();
+    void alsLuxFromReply();
     void alsMultiplier();
     void cutoffLuxRange();
     void pluginAttachesFilter();
@@ -104,6 +263,10 @@ private:
     QQuickView *createView();
     QImage grab(QQuickView *view);
     void compare(const QImage &image, const QPoint &pos, const QColor &expected);
+    // A controller for a QQuickView with the display hardware faked; a null
+    // hwRelease means no hw-release file
+    OwlfishController *createPqController(const QTemporaryDir &dir, PqDisplay::Backend *backend,
+                                          const QByteArray &hwRelease = "ID=jp2601\n");
 
     QTemporaryDir m_cacheDir;
 };
@@ -145,6 +308,22 @@ void tst_Owlfish::compare(const QImage &image, const QPoint &pos, const QColor &
         QFAIL(qPrintable(QStringLiteral("pixel (%1,%2) is %3, expected %4")
                          .arg(pos.x()).arg(pos.y()).arg(actual.name(), expected.name())));
     }
+}
+
+OwlfishController *tst_Owlfish::createPqController(const QTemporaryDir &dir,
+                                                   PqDisplay::Backend *backend,
+                                                   const QByteArray &hwRelease)
+{
+    const QString hwReleasePath = dir.filePath(QStringLiteral("hw-release"));
+    if (!hwRelease.isNull()) {
+        QFile file(hwReleasePath);
+        if (!file.open(QIODevice::WriteOnly) || file.write(hwRelease) != hwRelease.size())
+            qWarning() << "Cannot write" << hwReleasePath;
+    }
+    OwlfishController *controller = new OwlfishController(
+            "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts")));
+    controller->setDisplayHardware(backend, hwReleasePath);
+    return controller;
 }
 
 void tst_Owlfish::identityHasNoEffect()
@@ -726,8 +905,434 @@ void tst_Owlfish::statusOnDBus()
     QCOMPARE(reply.value(), QStringLiteral(OWLFISH_VERSION));
     QVERIFY(QRegularExpression(QStringLiteral("^\\d+\\.\\d+\\.\\d+")).match(reply.value()).hasMatch());
     QVERIFY(remote.call(QStringLiteral("resetCrashGuard")).type() == QDBusMessage::ReplyMessage);
+    reply = remote.call(QStringLiteral("renderer"));
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    QCOMPARE(reply.value(), QStringLiteral("none"));
+    reply = remote.call(QStringLiteral("diagnostics"));
+    QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+    QVERIFY(reply.value().startsWith(QStringLiteral("version " OWLFISH_VERSION "\nstatus starting\n"
+                                                     "renderer none (starting)\n")));
 
     bus.unregisterService(QLatin1String(OwlfishStatusService::ServiceName));
+}
+
+void tst_Owlfish::linearGain()
+{
+    QCOMPARE(ColorMatrix::linearGain(1), 1.0);
+    QCOMPARE(ColorMatrix::linearGain(0), 0.0);
+    // Dim 50 %: what the Jolla Phone's display hardware needs to look the
+    // same as the GPU filter (0.5^2.2 = 0.218 was checked by eye)
+    QVERIFY(qAbs(ColorMatrix::linearGain(0.5) - 0.214) < 0.001);
+    QCOMPARE(ColorMatrix::linearGain(2), 1.0);
+
+    // One gain per output channel
+    const QMatrix3x3 matrix = ColorMatrix::withGain(ColorMatrix::identity(), QVector3D(1.0f, 0.5f, 0.25f));
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            const float expected = row != column ? 0.0f
+                    : float(ColorMatrix::linearGain(row == 0 ? 1.0 : row == 1 ? 0.5 : 0.25));
+            QCOMPARE(matrix(row, column), expected);
+        }
+    }
+}
+
+void tst_Owlfish::pqFixedPoint()
+{
+    // 2048 is 1.0 (the neutral value checked on the Jolla Phone)
+    int values[9];
+    PqDisplay::toFixed(ColorMatrix::identity(), values);
+    for (int i = 0; i < 9; ++i)
+        QCOMPARE(values[i], PqIdentity[i]);
+
+    // Dim 50 %: 0.214 × 2048
+    QCOMPARE(pqMatrixFor(QVector3D(0.5f, 0.5f, 0.5f)),
+             QVector<int>({ 438, 0, 0, 0, 438, 0, 0, 0, 438 }));
+
+    // Rounded to the nearest step, also below zero
+    const float coefficients[9] = { 1.0f, -0.1f, 0.00024f, 0, 0.5f, 0, 0, 0, 0.00025f };
+    PqDisplay::toFixed(QMatrix3x3(coefficients), values);
+    QCOMPARE(values[0], 2048);
+    QCOMPARE(values[1], -205);
+    QCOMPARE(values[2], 0);
+    QCOMPARE(values[4], 1024);
+    QCOMPARE(values[8], 1);
+}
+
+void tst_Owlfish::pqDeviceId()
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("hw-release"));
+    QCOMPARE(PqDisplay::deviceId(path), QString());
+
+    auto idOf = [&path](const QByteArray &content) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return QStringLiteral("cannot write");
+        file.write(content);
+        file.close();
+        return PqDisplay::deviceId(path);
+    };
+    // As on the Jolla Phone
+    QCOMPARE(idOf("# comment\nNAME=\"Jolla Jolla Phone\"\nID=jp2601\nMER_HA_DEVICE=jp2601\n"),
+             QStringLiteral("jp2601"));
+    QCOMPARE(idOf("ID=\"jp2601\"\n"), QStringLiteral("jp2601"));
+    QCOMPARE(idOf("  ID='jp2601'  \n"), QStringLiteral("jp2601"));
+    QCOMPARE(idOf("VERSION_ID=1.0.0.17\n"), QString());
+
+    QVERIFY(PqDisplay::isVerified(QStringLiteral("jp2601")));
+    QVERIFY(!PqDisplay::isVerified(QString()));
+    QVERIFY(!PqDisplay::isVerified(QStringLiteral("jp2601 ")));
+    QVERIFY(!PqDisplay::isVerified(QStringLiteral("xqbt52")));
+}
+
+void tst_Owlfish::pqOpen()
+{
+    {
+        PqLog log;
+        PqDisplay pq(new FakePq(&log));
+        // Nothing is sent before it is open
+        QVERIFY(!pq.setMatrix(ColorMatrix::identity()));
+        QVERIFY(!pq.reset());
+        QCOMPARE(log.attempts, 0);
+
+        QVERIFY(pq.open());
+        QVERIFY(pq.open());
+        QCOMPARE(log.connects, 1);
+        QCOMPARE(pq.interfaceVersion(), 7);
+
+        const QMatrix3x3 dim = ColorMatrix::withGain(ColorMatrix::identity(), QVector3D(0.5f, 0.5f, 0.5f));
+        QVERIFY(pq.setMatrix(dim));
+        QVERIFY(pq.setMatrix(dim));
+        QCOMPARE(log.matrices.size(), 1);
+        QCOMPARE(pq.calls(), 1);
+
+        // Sent even if the service should already have it
+        QVERIFY(pq.reset());
+        QCOMPARE(log.gains, QVector<QVector<int>>({ PqNeutralGain }));
+        QCOMPARE(log.matrices.size(), 2);
+        QCOMPARE(log.matrices.last(), PqIdentity);
+        QVERIFY(pq.reset());
+        QCOMPARE(log.matrices.size(), 3);
+
+        log.failFrom = log.attempts;
+        QVERIFY(!pq.setMatrix(dim));
+        QCOMPARE(pq.error(), QStringLiteral("fake failure"));
+    }
+    {
+        PqLog log;
+        PqDisplay pq(new FakePq(&log, true, 6));
+        QVERIFY(!pq.open());
+        QVERIFY(pq.error().contains(QStringLiteral("version 6")));
+        QVERIFY(!pq.open());
+        QCOMPARE(log.connects, 1);
+        QVERIFY(!pq.setMatrix(ColorMatrix::identity()));
+        QCOMPARE(log.attempts, 0);
+    }
+    {
+        PqLog log;
+        PqDisplay pq(new FakePq(&log, false));
+        QVERIFY(!pq.open());
+        QCOMPARE(pq.error(), QStringLiteral("no service"));
+    }
+}
+
+void tst_Owlfish::pqWithoutLibgbinder()
+{
+    if (PqDisplay().open())
+        QSKIP("This host has libgbinder and a picture quality service");
+
+    PqDisplay pq;
+    QVERIFY(!pq.open());
+    QVERIFY(!pq.error().isEmpty());
+    QVERIFY(!pq.setMatrix(ColorMatrix::identity()));
+    QCOMPARE(pq.calls(), 0);
+
+    // Forced, with the real backend: the item draws
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_RENDERER", "pq");
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(new OwlfishController(
+            "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts"))));
+    qunsetenv("OWLFISH_RENDERER");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("blend"));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("display hardware not available: ")));
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    compare(grab(view.data()), White, QColor(128, 128, 128));
+}
+
+void tst_Owlfish::rendererSelection_data()
+{
+    QTest::addColumn<QByteArray>("hwRelease");
+    QTest::addColumn<QByteArray>("key");
+    QTest::addColumn<bool>("found");
+    QTest::addColumn<int>("version");
+    QTest::addColumn<QString>("renderer");
+    QTest::addColumn<QString>("reason");
+    QTest::addColumn<int>("connects");
+    // The separate device line, when the reason doesn't name the device
+    QTest::addColumn<QString>("deviceLine");
+
+    const QByteArray jollaPhone("NAME=\"Jolla Jolla Phone\"\nID=jp2601\n");
+    const QByteArray other("ID=xqbt52\n");
+    QTest::newRow("verified") << jollaPhone << QByteArray() << true << 7
+                              << "pq" << "renderer pq (device jp2601 verified)" << 1 << QString();
+    QTest::newRow("newer service") << jollaPhone << QByteArray("auto") << true << 8
+                                   << "pq" << "renderer pq (device jp2601 verified)" << 1
+                                   << QString();
+    QTest::newRow("old service") << jollaPhone << QByteArray() << true << 6
+                                 << "blend" << "service version 6, needs 7" << 1
+                                 << QStringLiteral("device jp2601, verified");
+    QTest::newRow("no service") << jollaPhone << QByteArray() << false << 7
+                                << "blend" << "display hardware not available: no service" << 1
+                                << QStringLiteral("device jp2601, verified");
+    // Nothing is loaded or called
+    QTest::newRow("other device") << other << QByteArray() << true << 7
+                                  << "blend" << "renderer blend (device xqbt52 not verified)" << 0
+                                  << QString();
+    QTest::newRow("no hw-release") << QByteArray() << QByteArray() << true << 7
+                                   << "blend" << "renderer blend (device unknown)" << 0
+                                   << QString();
+    QTest::newRow("forced blend") << jollaPhone << QByteArray("blend") << true << 7
+                                  << "blend" << "renderer blend (forced by the renderer key)" << 0
+                                  << QStringLiteral("device jp2601, verified");
+    QTest::newRow("forced pq") << other << QByteArray("PQ") << true << 7
+                               << "pq" << "renderer pq (forced by the renderer key)" << 1
+                               << QStringLiteral("device xqbt52, not verified");
+    // Still only with a service that is new enough
+    QTest::newRow("forced pq, old service") << other << QByteArray("pq") << true << 6
+                                            << "blend" << "service version 6" << 1
+                                            << QStringLiteral("device xqbt52, not verified");
+    QTest::newRow("forced pq, no service") << other << QByteArray("pq") << false << 7
+                                           << "blend" << "not available: no service" << 1
+                                           << QStringLiteral("device xqbt52, not verified");
+    QTest::newRow("unknown key") << jollaPhone << QByteArray("gpu") << true << 7
+                                 << "pq" << "renderer pq (device jp2601 verified)" << 1
+                                 << QString();
+}
+
+void tst_Owlfish::rendererSelection()
+{
+    QFETCH(QByteArray, hwRelease);
+    QFETCH(QByteArray, key);
+    QFETCH(bool, found);
+    QFETCH(int, version);
+    QFETCH(QString, renderer);
+    QFETCH(QString, reason);
+    QFETCH(int, connects);
+    QFETCH(QString, deviceLine);
+
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_RENDERER", key);
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(
+            dir, new FakePq(&log, found, version), hwRelease.isEmpty() ? QByteArray() : hwRelease));
+    qunsetenv("OWLFISH_RENDERER");
+    QCOMPARE(controller->renderer(), QStringLiteral("none"));
+
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), renderer);
+    QVERIFY2(controller->diagnostics().contains(reason), qPrintable(controller->diagnostics()));
+    QCOMPARE(log.connects, connects);
+    const QStringList lines = controller->diagnostics().split(QLatin1Char('\n'));
+    QCOMPARE(lines.filter(QStringLiteral("device ")).size(), 1);
+    if (!deviceLine.isEmpty())
+        QVERIFY2(lines.contains(deviceLine), qPrintable(controller->diagnostics()));
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+
+    if (renderer == QLatin1String("pq")) {
+        // Clears what an earlier run left, then the state
+        QCOMPARE(log.gains.value(0), PqNeutralGain);
+        QCOMPARE(log.matrices.value(0), PqIdentity);
+        QCOMPARE(log.matrices.last(), pqMatrixFor(QVector3D(0.5f, 0.5f, 0.5f)));
+        QVERIFY(!controller->filterItem()->isVisible());
+    } else {
+        QCOMPARE(log.attempts, 0);
+        QVERIFY(controller->filterItem()->isVisible());
+    }
+}
+
+void tst_Owlfish::rendererPqDrawsNothing()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+
+    const QVector3D gain = ColorTemperature::gain(2700) * 0.5f;
+    QTRY_COMPARE(log.matrices.value(log.matrices.size() - 1), pqMatrixFor(gain));
+    QCOMPARE(controller->renderer(), QStringLiteral("pq"));
+    // The fade is sent step by step, each step once
+    QVERIFY(log.matrices.size() > 3);
+    for (int i = 1; i < log.matrices.size(); ++i)
+        QVERIFY(log.matrices.at(i) != log.matrices.at(i - 1));
+
+    const QImage image = grab(view.data());
+    compare(image, White, QColor(255, 255, 255));
+    compare(image, Orange, QColor(255, 128, 64));
+
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("display hardware version 7, ")));
+    QVERIFY(!controller->diagnostics().contains(QStringLiteral("device jp2601, verified")));
+
+    // Leaves the hardware neutral
+    const int gains = log.gains.size();
+    controller.reset();
+    QCOMPARE(log.gains.size(), gains + 1);
+    QCOMPARE(log.gains.last(), PqNeutralGain);
+    QCOMPARE(log.matrices.last(), PqIdentity);
+}
+
+void tst_Owlfish::rendererHandover()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    const QVector3D gain = ColorTemperature::gain(2700) * 0.5f;
+    QTRY_COMPARE(log.matrices.value(log.matrices.size() - 1), pqMatrixFor(gain));
+
+    // To the GPU: the hardware is reset, no double tint
+    controller->settings()->setRenderer(QStringLiteral("blend"));
+    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QCOMPARE(log.matrices.last(), PqIdentity);
+    QCOMPARE(log.gains.last(), PqNeutralGain);
+    QVERIFY(controller->filterItem()->isVisible());
+    const QColor tinted(qRound(255 * gain.x()), qRound(255 * gain.y()), qRound(255 * gain.z()));
+    QTRY_VERIFY(grab(view.data()).pixelColor(White) != QColor(Qt::white));
+    compare(grab(view.data()), White, tinted);
+
+    // And back, with the state sent again
+    const int matrices = log.matrices.size();
+    controller->settings()->setRenderer(QString());
+    QCOMPARE(controller->renderer(), QStringLiteral("pq"));
+    QCOMPARE(log.connects, 1);
+    QCOMPARE(log.matrices.size(), matrices + 2);
+    QCOMPARE(log.matrices.at(matrices), PqIdentity);
+    QCOMPARE(log.matrices.last(), pqMatrixFor(gain));
+    QTRY_COMPARE(grab(view.data()).pixelColor(White), QColor(Qt::white));
+}
+
+void tst_Owlfish::rendererMasterSwitch()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "3400");
+    qputenv("OWLFISH_DIM", "40");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    const QVector3D gain = ColorTemperature::gain(3400) * 0.6f;
+    QTRY_COMPARE(log.matrices.value(log.matrices.size() - 1), pqMatrixFor(gain));
+
+    // Fades to neutral, still on the hardware
+    int matrices = log.matrices.size();
+    controller->settings()->setEnabled(false);
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    QVERIFY(log.matrices.size() > matrices + 2);
+    QCOMPARE(controller->renderer(), QStringLiteral("pq"));
+
+    matrices = log.matrices.size();
+    controller->settings()->setEnabled(true);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixFor(gain));
+    QVERIFY(log.matrices.size() > matrices + 2);
+}
+
+void tst_Owlfish::rendererFallback()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog log;
+    // The reset at the start works (gain, identity), the fade's second step
+    // fails
+    log.failFrom = 3;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("blend"));
+    QVERIFY(controller->filterItem()->isVisible());
+    QVERIFY(controller->diagnostics().contains(
+            QStringLiteral("renderer blend (display hardware failed: fake failure)\n")));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ndevice jp2601, verified\n")));
+    // The failed step, then the reset of what can still be reset
+    QCOMPARE(log.attempts, 6);
+
+    // The item carries on with the fade
+    const QVector3D gain = ColorTemperature::gain(2700) * 0.5f;
+    QTRY_VERIFY(qFuzzyCompare(controller->filterItem()->gain(), gain));
+    compare(grab(view.data()), White, QColor(qRound(255 * gain.x()), qRound(255 * gain.y()),
+                                             qRound(255 * gain.z())));
+
+    // For the rest of the run
+    controller->settings()->setRenderer(QStringLiteral("pq"));
+    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QCOMPARE(log.attempts, 6);
+    controller.reset();
+    QCOMPARE(log.attempts, 6);
+}
+
+void tst_Owlfish::rendererResetOnQuit()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "0");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(log.matrices.value(log.matrices.size() - 1), pqMatrixFor(ColorTemperature::gain(2700)));
+
+    // The compositor quits; the hardware must not keep the tint
+    const int gains = log.gains.size();
+    QVERIFY(QMetaObject::invokeMethod(QCoreApplication::instance(), "aboutToQuit"));
+    QCOMPARE(log.gains.size(), gains + 1);
+    QCOMPARE(log.matrices.last(), PqIdentity);
+    // Only once
+    controller.reset();
+    QCOMPARE(log.gains.size(), gains + 1);
+}
+
+void tst_Owlfish::rendererCrashGuard()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "50");
+    QTemporaryDir dir;
+    CrashGuard guard(dir.filePath(QStringLiteral("unhealthy-starts")), 3);
+    for (int i = 0; i < 3; ++i)
+        QVERIFY(guard.begin());
+
+    // Left to a reboot: the calls could be what crashed the compositor
+    PqLog log;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    QVERIFY(!controller->isActive());
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTest::qWait(200);
+    QCOMPARE(controller->renderer(), QStringLiteral("none"));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nstatus crash-guard\nrenderer none (crash-guard)\n")));
+    controller.reset();
+    QCOMPARE(log.connects, 0);
+    QCOMPARE(log.attempts, 0);
 }
 
 void tst_Owlfish::updateEnv_data()
@@ -917,6 +1522,161 @@ void tst_Owlfish::cutoffReset()
     // Primed again: the next reading applies at once
     cutoff.addReading(5000);
     QVERIFY(cutoff.isBright());
+}
+
+void tst_Owlfish::cutoffInitialReadingAppliesImmediately()
+{
+    AmbientCutoff cutoff;
+    cutoff.setThreshold(1000);
+    cutoff.setDelays(60000, 60000);
+    QSignalSpy spy(&cutoff, &AmbientCutoff::brightChanged);
+
+    cutoff.addInitialReading(20000);
+    QVERIFY(cutoff.isBright());
+    QCOMPARE(spy.count(), 1);
+
+    // A moved threshold applies to it as to a reading
+    cutoff.setThreshold(30000);
+    QVERIFY(!cutoff.isBright());
+}
+
+void tst_Owlfish::cutoffReadingReplacesInitialReading()
+{
+    // The initial level may be stale: the first real reading applies at once
+    AmbientCutoff cutoff;
+    cutoff.setThreshold(1000);
+    cutoff.setDelays(60000, 60000);
+    cutoff.addInitialReading(20000);
+    QVERIFY(cutoff.isBright());
+
+    cutoff.addReading(10);
+    QVERIFY(!cutoff.isBright());
+
+    // Then the delays apply again
+    cutoff.addReading(20000);
+    QVERIFY(!cutoff.isBright());
+}
+
+void tst_Owlfish::cutoffInitialReadingAfterReadingIgnored()
+{
+    // A reply that arrives after the first reading is older than it
+    AmbientCutoff cutoff;
+    cutoff.setThreshold(1000);
+    cutoff.addReading(20000);
+    QSignalSpy spy(&cutoff, &AmbientCutoff::brightChanged);
+
+    cutoff.addInitialReading(10);
+    QVERIFY(cutoff.isBright());
+    QCOMPARE(spy.count(), 0);
+
+    // Only one initial reading, too
+    AmbientCutoff other;
+    other.setThreshold(1000);
+    other.addInitialReading(20000);
+    other.addInitialReading(10);
+    QVERIFY(other.isBright());
+}
+
+void tst_Owlfish::cutoffInitialReadingAfterReset()
+{
+    AmbientCutoff cutoff;
+    cutoff.setThreshold(1000);
+    cutoff.addReading(20000);
+    cutoff.reset();
+    QVERIFY(!cutoff.isBright());
+
+    // The sensor was started again
+    cutoff.addInitialReading(20000);
+    QVERIFY(cutoff.isBright());
+}
+
+void tst_Owlfish::cutoffSaturatedCountsAsBright()
+{
+    // The Jolla Phone's sensor stops at 65535 × 0.0333333 lux, below a
+    // threshold set on another phone
+    const qreal maximum = 65535 * 0.0333333;
+    AmbientCutoff cutoff;
+    cutoff.setThreshold(5000);
+    cutoff.setDelays(0, 0);
+    cutoff.setMaximum(maximum);
+
+    cutoff.addReading(maximum);
+    QVERIFY(cutoff.isBright());
+    cutoff.addReading(1000);
+    QTRY_VERIFY(!cutoff.isBright());
+    // One step below the top still counts
+    cutoff.addReading(65534 * 0.0333333);
+    QTRY_VERIFY(cutoff.isBright());
+
+    // Not known: only the threshold
+    AmbientCutoff unknown;
+    unknown.setThreshold(5000);
+    unknown.addReading(maximum);
+    QVERIFY(!unknown.isBright());
+}
+
+void tst_Owlfish::cutoffMaximumAppliesToLastReading()
+{
+    // The range can arrive after the first reading
+    AmbientCutoff cutoff;
+    cutoff.setThreshold(5000);
+    cutoff.setDelays(60000, 60000);
+    cutoff.addInitialReading(2184.5);
+    QVERIFY(!cutoff.isBright());
+
+    cutoff.setMaximum(2184.5);
+    QVERIFY(cutoff.isBright());
+    // And stays after a restart of the sensor
+    cutoff.reset();
+    cutoff.addReading(2184.5);
+    QVERIFY(cutoff.isBright());
+}
+
+void tst_Owlfish::alsLuxFromReply()
+{
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected())
+        QSKIP("No session bus");
+    qDBusRegisterMetaType<TimedLux>();
+    qDBusRegisterMetaType<SensorRange>();
+    qDBusRegisterMetaType<QList<SensorRange>>();
+
+    FakeAlsSensor sensor;
+    const QString path = QStringLiteral("/SensorManager/alssensor");
+    QVERIFY(bus.registerObject(path, &sensor, QDBusConnection::ExportAllSlots));
+    // Another connection, so the call goes through the bus and the reply is
+    // demarshalled as on the phone
+    QDBusConnection client = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
+                                                           QStringLiteral("owlfish-test-client"));
+    QVERIFY(client.isConnected());
+
+    auto call = [&](const QString &method) -> QDBusMessage {
+        QDBusPendingCall pending = client.asyncCall(QDBusMessage::createMethodCall(
+                bus.baseService(), path, QStringLiteral("local.ALSSensor"), method));
+        if (!QTest::qWaitFor([&pending]() { return pending.isFinished(); }, 5000))
+            qWarning() << method << "timed out";
+        return pending.reply();
+    };
+    quint32 lux = 0;
+    QVERIFY(::alsLuxFromReply(call(QStringLiteral("lux")), &lux));
+    QCOMPARE(lux, 800u);
+
+    lux = 0;
+    QVERIFY(!::alsLuxFromReply(call(QStringLiteral("plainLux")), &lux));
+    QVERIFY(!::alsLuxFromReply(call(QStringLiteral("noSuchMethod")), &lux));
+    QCOMPARE(lux, 0u);
+
+    double maximum = 0;
+    QVERIFY(::alsMaximumFromReply(call(QStringLiteral("getAvailableDataRanges")), &maximum));
+    QCOMPARE(maximum, 65535.0);
+    maximum = 0;
+    QVERIFY(!::alsMaximumFromReply(call(QStringLiteral("noRanges")), &maximum));
+    QVERIFY(!::alsMaximumFromReply(call(QStringLiteral("lux")), &maximum));
+    QVERIFY(!::alsMaximumFromReply(call(QStringLiteral("noSuchMethod")), &maximum));
+    QCOMPARE(maximum, 0.0);
+
+    bus.unregisterObject(path);
+    QDBusConnection::disconnectFromBus(QStringLiteral("owlfish-test-client"));
 }
 
 void tst_Owlfish::alsMultiplier()

@@ -34,8 +34,12 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   instead of the device losing its plugins.
 - **Status:** the plugin registers `io.github.ccontino84.owlfish` on the
   session bus, with `status()` (`active`, `starting`, `no-window`,
-  `crash-guard`), `version()` and `resetCrashGuard()`. The settings page
+  `crash-guard`), `version()`, `resetCrashGuard()`, `renderer()` and
+  `diagnostics()` (see below). The settings page
   asks once when it opens and shows the running version under its title.
+  A double tap on its header opens a hidden page with `diagnostics()` and a
+  Copy button, for support (without a reply, the page writes the status it
+  found instead).
   Without a reply it reads `00-owlfish.conf`: missing means "not supported
   on this device", present means "restart the phone". A device file added
   after installation also looks like the latter; reinstalling runs the
@@ -46,6 +50,9 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   `QSGRenderNode`, which in Qt 5.6 turns off the renderer's depth-buffer
   optimisation for the whole compositor scene. With gain (1, 1, 1) the node
   is removed.
+- **Renderer:** on verified devices the display hardware applies the gain
+  instead (`pq`), at no GPU cost; everywhere else the item draws it
+  (`blend`). See below.
 - **Scope:** the plugin only activates inside the `lipstick` executable, even
   if the environment variable leaks into child processes. It is built with
   hidden symbols (it exports only `qt_plugin_*`), so none of its symbols can
@@ -60,6 +67,8 @@ Source layout (`src/`):
 | `plugin.cpp` | `QGenericPlugin` entry, process/window options |
 | `controller.*` | finds the window, combines settings, schedule and light sensor into a gain, fades |
 | `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and the multiply-blend material |
+| `pqdisplay.*` | the display hardware's colour matrix through MediaTek's PQ service |
+| `colormatrix.*` | the gain in linear light, for the display hardware |
 | `colortemperature.*` | kelvin → per-channel gain |
 | `schedule.*` | the daily window and its transitions |
 | `sun.*` | sunset and sunrise (NOAA's solar equations) |
@@ -67,7 +76,7 @@ Source layout (`src/`):
 | `ambientcutoff.*`, `alscalibration.*` | bright-light hysteresis and debounce; mce's `AlsValueMultiplier` |
 | `settings.*` | dconf keys (mlite `MDConfItem`); environment variables in host builds |
 | `crashguard.*` | the unhealthy-start counter |
-| `statusservice.*` | the D-Bus status for the settings page |
+| `statusservice.*` | the D-Bus status for the settings page and support |
 
 ### How the colour is computed
 
@@ -82,6 +91,48 @@ final gain is tint × dimming.
 
 During a gradual change the colour moves in even steps of mireds between no
 tint and the chosen warmth.
+
+### Display hardware (`pq`)
+
+On MediaTek devices the vendor's picture quality service
+(`vendor.mediatek.hardware.pq_aidl.IPictureQuality_AIDL/default`, on
+`/dev/binder`, which any user can open on the Jolla Phone) sets the display
+controller's colour matrix. Owlfish sends `setColorMatrix3x3` with
+`diag(linearGain(gain))`: the service works in linear light, so each encoded
+gain goes through the sRGB decoding curve. On the Jolla Phone 2048 is 1.0;
+the framework's own unit elsewhere is 1024, so the base is not the same on
+every build. That is why `pq` is only chosen automatically on devices where
+the base was checked.
+
+- **Selection** (`renderer` key `auto`): the `ID` in `/etc/hw-release` is
+  on the verified list (`jp2601`), `libgbinder.so.1` loads (with `dlopen`,
+  so there is no package dependency), the service is there, and it answers
+  `getInterfaceVersion` with 7 or more. Otherwise `blend`, and on other
+  devices nothing is loaded or called. `pq` skips only the device list;
+  `blend` skips everything.
+- **Fades:** one call per animation step, skipped when the fixed-point
+  matrix is the same as the last one. The item keeps the gain but is
+  hidden.
+- **Resets:** the service keeps the matrix until it is changed or the
+  device restarts. Owlfish resets it (identity, and the separate RGB gain
+  to 2048) when it starts using it (which clears what a crashed run left),
+  when it stops (renderer key, failure), on `aboutToQuit` and in the
+  controller's destructor. Switched off, the fade ends at identity. After a
+  crash the screen stays tinted until the next start, which sends the
+  whole state again. When the crash guard has tripped, Owlfish makes no
+  calls at all, not even a reset: they could be what crashed; a reboot
+  clears the hardware.
+- **Failure:** if a call fails, Owlfish resets what it can and the item
+  draws for the rest of the run.
+- **Diagnostics:** the journal line `Renderer <name> - <reason>` at every
+  change, and `renderer <name>` in the per-settings-change line.
+  `diagnostics()` returns the version and status, the renderer and why, the
+  key, the device ID and the service version with the call count and times
+  (or why it is not available).
+- **Screenshots** don't show the hardware's tint; with `blend` they do.
+
+The research behind this (the service's calls, the phone tests) is outside
+the repository.
 
 ### Schedule
 
@@ -132,7 +183,23 @@ reads no files.
 
 `QLightSensor`, event driven (sensorfw delivers a reading only when the value
 changes), only while Owlfish is enabled with dimming and "only in the dark"
-set. Above the threshold the dimming fades out after 1.5 s; below 75 % of it,
+set. sensorfw sends nothing when a session starts, so steady bright light
+would count as dark until it changes; right after starting the sensor the
+plugin asks sensorfw for the value it already has, as mce does
+(`local.ALSSensor.lux` on `com.nokia.SensorService`
+`/SensorManager/alssensor`, system bus). That value applies at once, and so
+does the first reading after it, as it may be stale. The settings page's meter
+does the same, and ignores its `LightSensor.reading` until a reading has
+arrived: in Qt 5.6 its `illuminance` is uninitialised until then.
+
+Sensors have a ceiling: the Jolla Phone's reports at most 65535 raw
+(`AlsValueMultiplier` 0.0333333, so about 2184 lux), which overcast
+daylight already reaches; the Xperia 10 III's goes to 50 000 lux. At start
+the plugin reads the maximum (`local.ALSSensor.getAvailableDataRanges`),
+counts readings at it as bright whatever the threshold, and publishes it in
+lux as `/apps/owlfish/als_max_lux`. The settings page then offers no
+threshold above it; a threshold stored earlier stays as it is and works
+like the top of the scale. Above the threshold the dimming fades out after 1.5 s; below 75 % of it,
 it fades back in after 5 s. Moving the threshold applies at once. Some
 devices report raw values instead of lux; mce corrects them with
 `[Sensors] AlsValueMultiplier` in `/etc/mce/NN*.ini`, and the plugin applies
@@ -155,6 +222,7 @@ dconf write /apps/owlfish/schedule_transition 30 # minutes, 0-120, default 60
 dconf write /apps/owlfish/location_manual true   # sun at the coordinates below, default false
 dconf write /apps/owlfish/latitude 60.17         # degrees, north positive
 dconf write /apps/owlfish/longitude 24.94        # degrees, east positive
+dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend (GPU) or pq; not on the settings page
 dconf read /apps/owlfish/sun_state               # written by the plugin, e.g. 'normal'
 dconf reset -f /apps/owlfish/                    # back to defaults
 ```
@@ -190,6 +258,9 @@ tint and dimming combined, the schedule (window, transitions, only the
 colour), sunset and sunrise against USNO reference values, the time zone
 lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
 guard, the D-Bus status, `update-env` against sample environment files,
+the display hardware with a fake PQ service (fixed point, device list,
+selection, fades, resets, handover, failure, crash guard; without
+libgbinder on the host, `pq` falls back to `blend`),
 and loading through `QGenericPluginFactory`, including a sun schedule
 at fake polar coordinates (`OWLFISH_LOCATION_MANUAL=1 OWLFISH_LATITUDE=89.9`).
 
@@ -214,23 +285,20 @@ Close the Settings app if it was open, so it picks up the new page. Check:
 devel-su sh -c 'grep -l libowlfish /proc/[0-9]*/maps'   # must list only lipstick's pid
 dbus-send --session --print-reply --dest=io.github.ccontino84.owlfish \
     /owlfish io.github.ccontino84.owlfish.status        # string "active"
+dbus-send --session --print-reply --dest=io.github.ccontino84.owlfish \
+    /owlfish io.github.ccontino84.owlfish.diagnostics   # also on the settings page: double-tap the header
 ```
 
-The plugin logs a line whenever a setting changes. Switch Owlfish in the top
-menu, then:
-
-```sh
-devel-su journalctl -n 500 --no-pager | grep temperature   # e.g. "enabled true temperature 4500 K dim 0 % ..."
-devel-su journalctl -n 500 --no-pager | grep "Sun for"     # e.g. Sun for "2026-09-28" in "Europe/Berlin" sunset 19:04 sunrise 07:10
-```
-
+The plugin logs a line whenever a setting changes (e.g. `enabled true
+temperature 4500 K dim 0 % ... renderer pq`) and the day's sun times (e.g.
+`Sun for "2026-09-28" in "Europe/Berlin" sunset 19:04 sunrise 07:10`).
 Sailfish OS keeps the journal in RAM and only 1 MB of it
-(`RuntimeMaxUse=1M`), so lines from the home screen's start are soon gone.
-Look for them within a minute or two of restarting it:
+(`RuntimeMaxUse=1M`), so other messages (on the Jolla Phone, the kernel's)
+can push Owlfish's lines out before you look. Follow it live instead, then
+restart the home screen or change a setting:
 
 ```sh
-systemctl --user restart lipstick
-devel-su journalctl -b --no-pager | grep -E "Filter attached|sensor multiplier|unhealthy"   # e.g. "Filter attached to LipstickCompositor"
+devel-su journalctl -f -n 0 --no-pager _COMM=lipstick   # e.g. "Renderer pq - device jp2601 verified"
 ```
 
 ## Making a release

@@ -59,6 +59,12 @@ double checkDegrees(double value, double limit)
     return value;
 }
 
+QString normalizeRenderer(const QString &value)
+{
+    const QString renderer = value.trimmed().toLower();
+    return renderer.isEmpty() ? QStringLiteral("auto") : renderer;
+}
+
 }
 
 #ifdef HAVE_MLITE
@@ -94,11 +100,13 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_locationManual(item("location_manual", this))
     , m_latitude(item("latitude", this))
     , m_longitude(item("longitude", this))
+    , m_renderer(item("renderer", this))
 {
     // Not the keys only the plugin writes
     for (MDConfItem *item : { m_enabled, m_temperature, m_dim, m_cutoffEnabled, m_cutoffLux,
                               m_scheduled, m_scheduleSun, m_scheduleFrom, m_scheduleTo,
-                              m_scheduleTransition, m_locationManual, m_latitude, m_longitude })
+                              m_scheduleTransition, m_locationManual, m_latitude, m_longitude,
+                              m_renderer })
         connect(item, &MDConfItem::valueChanged, this, &OwlfishSettings::changed);
 }
 
@@ -167,6 +175,11 @@ double OwlfishSettings::longitude() const
     return checkDegrees(m_longitude->value(), 180);
 }
 
+QString OwlfishSettings::renderer() const
+{
+    return normalizeRenderer(m_renderer->value().toString());
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
     publish(QStringLiteral("als_multiplier"), multiplier);
@@ -214,6 +227,7 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_locationManual(env("location_manual", 0) != 0)
     , m_latitude(checkDegrees(env("latitude", std::numeric_limits<double>::quiet_NaN()), 90))
     , m_longitude(checkDegrees(env("longitude", std::numeric_limits<double>::quiet_NaN()), 180))
+    , m_renderer(normalizeRenderer(QString::fromLocal8Bit(qgetenv("OWLFISH_RENDERER"))))
 {
 }
 
@@ -282,6 +296,11 @@ double OwlfishSettings::longitude() const
     return m_longitude;
 }
 
+QString OwlfishSettings::renderer() const
+{
+    return m_renderer;
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
     publish(QStringLiteral("als_multiplier"), multiplier);
@@ -293,6 +312,18 @@ void OwlfishSettings::publish(const QString &key, const QVariant &value)
         m_published.insert(key, value);
     else
         m_published.remove(key);
+}
+
+void OwlfishSettings::setEnabled(bool enabled)
+{
+    m_enabled = enabled;
+    emit changed();
+}
+
+void OwlfishSettings::setRenderer(const QString &renderer)
+{
+    m_renderer = normalizeRenderer(renderer);
+    emit changed();
 }
 
 #endif

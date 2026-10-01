@@ -9,6 +9,7 @@ moc_*
 /plugins/
 /tests/tst_owlfish
 /src/libowlfish.so*
+generated/
 
 # host builds
 /build/

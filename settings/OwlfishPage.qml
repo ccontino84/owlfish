@@ -38,6 +38,9 @@ Page {
         // Written by the plugin from mce's AlsValueMultiplier, so that the
         // light reading below is in the same units as the threshold
         property real als_multiplier: 1.0
+        // Written by the plugin: the most the light sensor can report, in
+        // the same units; 0 if not known
+        property real als_max_lux: 0
         // Written by the plugin, which reads the time zone: its city (empty
         // if it has none) and that city's coordinates
         property string sun_place: ""
@@ -62,9 +65,18 @@ Page {
     // logarithmically. Indoors is typically 100-500 lux, daylight indoors near
     // a window 1000-2000, outdoors in shade 10 000-25 000, in sun more.
     // Same range as OwlfishSettings::MinimumCutoffLux..MaximumCutoffLux.
-    readonly property var luxSteps: [100, 150, 200, 300, 500, 700,
-                                     1000, 1500, 2000, 3000, 5000, 7000,
-                                     10000, 15000, 20000, 30000, 50000]
+    readonly property var allLuxSteps: [100, 150, 200, 300, 500, 700,
+                                        1000, 1500, 2000, 3000, 5000, 7000,
+                                        10000, 15000, 20000, 30000, 50000]
+    // Only the levels the sensor can report: above its maximum a threshold
+    // would never be reached (the Jolla Phone's stops near 2200 lux)
+    readonly property var luxSteps: {
+        var maximum = config.als_max_lux
+        if (!(maximum > 0))
+            return allLuxSteps
+        var steps = allLuxSteps.filter(function(lux) { return lux <= maximum })
+        return steps.length >= 2 ? steps : allLuxSteps
+    }
 
     // Index of the "When" choices: all the time, fixed times, sunset to sunrise
     readonly property int whenIndex: !config.schedule ? 0 : (config.schedule_sun ? 2 : 1)
@@ -83,6 +95,11 @@ Page {
     // Ambient light for the meter, smoothed so that it does not jitter;
     // -1 before the first reading
     property real ambientLux: -1
+    // The latest level from the sensor, in lux; -1 until one arrives
+    property real latestLux: -1
+    // A reading arrived since the sensor started, so sensorfw's stored level
+    // is no longer needed
+    property bool sensorReported: false
 
     // Whether the plugin runs in the home screen, checked once when the page
     // opens: OwlfishController::status() ("active", "starting", "no-window",
@@ -118,6 +135,33 @@ Page {
         }
         request.open("GET", "file:///var/lib/environment/compositor/00-owlfish.conf")
         request.send()
+    }
+
+    // The plugin's diagnostics; without a reply (not running, or older than
+    // 1.2) what the page knows
+    function openDiagnostics() {
+        function show(text) {
+            pageStack.push(Qt.resolvedUrl("DiagnosticsPage.qml"), { text: text })
+        }
+        plugin.typedCall("diagnostics", [],
+                         function(text) { show(text) },
+                         function() {
+                             var lines = []
+                             if (page.pluginVersion !== "")
+                                 lines.push("version " + page.pluginVersion)
+                             switch (page.pluginStatus) {
+                             case "unsupported":
+                                 lines.push("status unsupported (00-owlfish.conf missing)")
+                                 break
+                             case "not-running":
+                                 lines.push("status not-running (00-owlfish.conf present)")
+                                 break
+                             default:
+                                 lines.push("status " + (page.pluginStatus || "unknown"))
+                                 lines.push("no diagnostics from this version")
+                             }
+                             show(lines.join("\n"))
+                         })
     }
 
     Component.onCompleted: {
@@ -320,10 +364,39 @@ Page {
         onTriggered: page.nowMinutes = page.currentMinutes()
     }
 
-    // Live reading to help pick the threshold; only while the page is shown
+    // Live reading to help pick the threshold; only while the page is shown.
+    // Its reading holds garbage until the first one arrives (Qt 5.6), so only
+    // readings that arrived count.
     LightSensor {
         id: lightSensor
         active: page.status === PageStatus.Active && Qt.application.active
+
+        onActiveChanged: {
+            if (!active)
+                return
+            page.sensorReported = false
+            // sensorfw sends nothing to a new session until the level
+            // changes; ask for the one it has, as the plugin does
+            sensorService.typedCall("lux", [], function(result) {
+                // (timestamp, value)
+                var raw = Array.isArray(result) ? result[1] : undefined
+                if (!page.sensorReported && typeof raw === "number")
+                    page.latestLux = raw * (config.als_multiplier || 1.0)
+            })
+        }
+        onReadingChanged: {
+            page.sensorReported = true
+            page.latestLux = reading.illuminance * (config.als_multiplier || 1.0)
+        }
+    }
+
+    DBusInterface {
+        id: sensorService
+
+        bus: DBus.SystemBus
+        service: "com.nokia.SensorService"
+        path: "/SensorManager/alssensor"
+        iface: "local.ALSSensor"
     }
 
     // The sensor can report many times per second; sample it once a second,
@@ -335,9 +408,9 @@ Page {
         running: lightSensor.active
         triggeredOnStart: true
         onTriggered: {
-            if (!lightSensor.reading)
+            if (page.latestLux < 0)
                 return
-            var lux = Math.max(1, lightSensor.reading.illuminance * (config.als_multiplier || 1.0))
+            var lux = Math.max(1, page.latestLux)
             if (page.ambientLux < 0) {
                 page.ambientLux = lux
                 return
@@ -362,6 +435,12 @@ Page {
             PageHeader {
                 title: "Owlfish"
                 description: page.pluginVersion !== "" ? "Version " + page.pluginVersion : ""
+
+                // Hidden, for support
+                MouseArea {
+                    anchors.fill: parent
+                    onDoubleClicked: page.openDiagnostics()
+                }
             }
 
             // Only when there is a problem; the settings stay editable

@@ -5,16 +5,20 @@ INCLUDEPATH += $$PWD
 
 # mce display state, for the schedule; the status for the settings page
 QT += dbus
+# libgbinder is loaded at run time (pqdisplay.cpp)
+LIBS += -ldl
 
 HEADERS += \
     $$PWD/alscalibration.h \
     $$PWD/ambientcutoff.h \
     $$PWD/colorfilteritem.h \
     $$PWD/colorfiltermaterial.h \
+    $$PWD/colormatrix.h \
     $$PWD/colortemperature.h \
     $$PWD/controller.h \
     $$PWD/crashguard.h \
     $$PWD/logging.h \
+    $$PWD/pqdisplay.h \
     $$PWD/schedule.h \
     $$PWD/settings.h \
     $$PWD/statusservice.h \
@@ -26,23 +30,38 @@ SOURCES += \
     $$PWD/ambientcutoff.cpp \
     $$PWD/colorfilteritem.cpp \
     $$PWD/colorfiltermaterial.cpp \
+    $$PWD/colormatrix.cpp \
     $$PWD/colortemperature.cpp \
     $$PWD/controller.cpp \
     $$PWD/crashguard.cpp \
     $$PWD/logging.cpp \
+    $$PWD/pqdisplay.cpp \
     $$PWD/schedule.cpp \
     $$PWD/settings.cpp \
     $$PWD/statusservice.cpp \
     $$PWD/sun.cpp \
     $$PWD/timezonelocation.cpp
 
-# The package version, for the settings page; the spec is the one source
+# The package version, for the settings page; the spec is the one source.
+# It goes into a generated header, rewritten only when it changes, so that
+# the files using it are rebuilt; the spec is a dependency of the Makefile, so
+# qmake runs again when Version is raised.
 SPEC_LINES = $$cat($$PWD/../rpm/owlfish.spec, lines)
 for(line, SPEC_LINES) {
     contains(line, "^Version:.*"): OWLFISH_VERSION = $$section(line, " ", -1)
 }
 isEmpty(OWLFISH_VERSION): error("No Version in rpm/owlfish.spec")
-DEFINES += OWLFISH_VERSION=\\\"$$OWLFISH_VERSION\\\"
+QMAKE_INTERNAL_INCLUDED_FILES += $$PWD/../rpm/owlfish.spec
+# In a subdirectory of the build directory: qmake searches the sources
+# first, where an in-source build's copy would shadow an out-of-source one
+VERSION_HEADER = $$OUT_PWD/generated/owlfish_version.h
+VERSION_LINE = "$${LITERAL_HASH}define OWLFISH_VERSION \"$$OWLFISH_VERSION\""
+VERSION_EXISTING = $$cat($$VERSION_HEADER, lines)
+!equals(VERSION_EXISTING, $$VERSION_LINE) {
+    !write_file($$VERSION_HEADER, VERSION_LINE): error("Cannot write $$VERSION_HEADER")
+}
+INCLUDEPATH += $$OUT_PWD/generated
+QMAKE_CLEAN += $$VERSION_HEADER
 
 # On Sailfish OS settings come from dconf via mlite5; host builds fall back
 # to environment variables (see settings.cpp)

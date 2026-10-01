@@ -4,14 +4,19 @@
 #include "controller.h"
 #include "alscalibration.h"
 #include "ambientcutoff.h"
+#include "colormatrix.h"
 #include "settings.h"
 #include "colortemperature.h"
 #include "logging.h"
+#include <owlfish_version.h>
 
 #include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
 #include <QGuiApplication>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QStringList>
 #include <QTimeZone>
 
 #include <cmath>
@@ -49,8 +54,14 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     , m_cutoff(nullptr)
     , m_lightSensor(nullptr)
     , m_alsMultiplier(1.0)
+    , m_luxQuery(0)
     , m_findAttempts(0)
     , m_displayOn(true)
+    , m_pq(new PqDisplay)
+    , m_hwReleasePath(QLatin1String(PqDisplay::HwReleasePath))
+    , m_pqActive(false)
+    , m_pqFailed(false)
+    , m_reasonNamesDevice(false)
     , m_sunLocated(false)
     , m_sunLatitude(0)
     , m_sunLongitude(0)
@@ -65,6 +76,9 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
         return;
     }
     m_active = true;
+
+    // The display hardware keeps its matrix after the compositor is gone
+    connect(qApp, &QCoreApplication::aboutToQuit, this, &OwlfishController::stopPq);
 
     m_settings = new OwlfishSettings(this);
     connect(m_settings, &OwlfishSettings::changed, this, &OwlfishController::applySettings);
@@ -90,6 +104,17 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     connect(&m_findTimer, &QTimer::timeout, this, &OwlfishController::findWindow);
     m_findTimer.start();
     QTimer::singleShot(0, this, &OwlfishController::findWindow);
+}
+
+OwlfishController::~OwlfishController()
+{
+    stopPq();
+}
+
+void OwlfishController::setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath)
+{
+    m_pq.reset(new PqDisplay(backend));
+    m_hwReleasePath = hwReleasePath;
 }
 
 QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, int dimPercent)
@@ -119,6 +144,43 @@ QString OwlfishController::status() const
 void OwlfishController::resetCrashGuard()
 {
     m_guard.markHealthy();
+}
+
+QString OwlfishController::renderer() const
+{
+    if (!m_item)
+        return QStringLiteral("none");
+    return m_pqActive ? QStringLiteral("pq") : QStringLiteral("blend");
+}
+
+QString OwlfishController::diagnostics() const
+{
+    // Pasted into reports as a whole, so it names the version too
+    QStringList lines;
+    lines << QStringLiteral("version %1").arg(QStringLiteral(OWLFISH_VERSION))
+          << QStringLiteral("status %1").arg(status());
+    lines << QStringLiteral("renderer %1 (%2)")
+             .arg(renderer(), m_item ? m_rendererReason : status());
+    if (m_settings)
+        lines << QStringLiteral("renderer key %1").arg(m_settings->renderer());
+    // Unless the reason already names it
+    if (!m_reasonNamesDevice) {
+        const QString device = PqDisplay::deviceId(m_hwReleasePath);
+        lines << QStringLiteral("device %1, %2")
+                 .arg(device.isEmpty() ? QStringLiteral("unknown") : device,
+                      PqDisplay::isVerified(device) ? QStringLiteral("verified") : QStringLiteral("not verified"));
+    }
+    if (m_pq->isOpen()) {
+        lines << QStringLiteral("display hardware version %1, %2 calls, mean %3 ms, max %4 ms")
+                 .arg(m_pq->interfaceVersion()).arg(m_pq->calls())
+                 .arg(m_pq->meanCallMs(), 0, 'f', 2).arg(m_pq->maxCallMs(), 0, 'f', 2);
+        if (!m_pq->error().isEmpty())
+            lines << QStringLiteral("display hardware error: %1").arg(m_pq->error());
+    } else {
+        lines << QStringLiteral("display hardware %1")
+                 .arg(m_pq->error().isEmpty() ? QStringLiteral("not checked") : m_pq->error());
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 void OwlfishController::findWindow()
@@ -159,6 +221,7 @@ void OwlfishController::attach(QQuickWindow *window)
     m_alsMultiplier = alsValueMultiplier();
     qCInfo(lcOwlfish) << "Ambient light sensor multiplier" << m_alsMultiplier;
     m_settings->publishAlsMultiplier(m_alsMultiplier);
+    querySensorMaximum();
 
     // Catch up with the schedule as soon as the display turns on. The timer
     // does not run during suspend.
@@ -183,13 +246,16 @@ void OwlfishController::applySettings()
     if (!m_item)
         return;
 
+    updateRenderer();
+
     qCInfo(lcOwlfish) << "enabled" << m_settings->enabled()
                         << "temperature" << m_settings->temperature() << "K"
                         << "dim" << m_settings->dim() << "%"
                         << "cutoff" << m_settings->cutoffEnabled() << m_settings->cutoffLux() << "lux"
                         << "schedule" << m_settings->scheduled() << m_settings->scheduleFrom()
                         << m_settings->scheduleTo() << m_settings->scheduleTransition()
-                        << "sun" << m_settings->scheduleSun() << "manual location" << m_settings->locationManual();
+                        << "sun" << m_settings->scheduleSun() << "manual location" << m_settings->locationManual()
+                        << "renderer" << qPrintable(renderer());
 
     m_cutoff->setThreshold(m_settings->cutoffLux());
     updateLightSensor();
@@ -352,6 +418,88 @@ void OwlfishController::updateGain(int fadeMs)
     fadeTo(filterGain(colour, m_settings->temperature(), dim), fadeMs);
 }
 
+void OwlfishController::updateRenderer()
+{
+    const QString key = m_settings->renderer();
+    const bool forcedBlend = key == QLatin1String("blend");
+    const bool forcedPq = key == QLatin1String("pq");
+    if (!forcedBlend && !forcedPq && key != QLatin1String("auto"))
+        qCWarning(lcOwlfish) << "Unknown renderer" << key << "- using auto";
+
+    bool pq = false;
+    QString reason;
+    bool namesDevice = false;
+    if (m_pqFailed) {
+        reason = m_rendererReason;
+    } else if (forcedBlend) {
+        reason = QStringLiteral("forced by the renderer key");
+    } else {
+        // Nothing is loaded or called on other devices
+        const QString device = PqDisplay::deviceId(m_hwReleasePath);
+        if (!forcedPq && !PqDisplay::isVerified(device)) {
+            reason = device.isEmpty() ? QStringLiteral("device unknown")
+                                      : QStringLiteral("device %1 not verified").arg(device);
+            namesDevice = true;
+        } else if (!m_pq->open()) {
+            reason = QStringLiteral("display hardware not available: %1").arg(m_pq->error());
+        } else {
+            pq = true;
+            namesDevice = !forcedPq;
+            reason = forcedPq ? QStringLiteral("forced by the renderer key")
+                              : QStringLiteral("device %1 verified").arg(device);
+        }
+    }
+
+    if (pq && !m_pqActive) {
+        // Also clears whatever an earlier run left behind
+        if (m_pq->reset()) {
+            m_pqActive = true;
+        } else {
+            m_pqFailed = true;
+            reason = QStringLiteral("display hardware failed: %1").arg(m_pq->error());
+            namesDevice = false;
+        }
+    } else if (!pq && m_pqActive) {
+        stopPq();
+    }
+    m_item->setVisible(!m_pqActive);
+
+    m_reasonNamesDevice = namesDevice;
+    if (reason != m_rendererReason) {
+        m_rendererReason = reason;
+        qCInfo(lcOwlfish) << "Renderer" << qPrintable(renderer()) << "-" << qPrintable(reason);
+    }
+    pushPq();
+}
+
+void OwlfishController::pushPq()
+{
+    if (!m_pqActive || !m_item)
+        return;
+    if (!m_pq->setMatrix(ColorMatrix::withGain(ColorMatrix::identity(), m_item->gain())))
+        pqFailed();
+}
+
+void OwlfishController::stopPq()
+{
+    if (!m_pqActive)
+        return;
+    m_pqActive = false;
+    m_pq->reset();
+}
+
+void OwlfishController::pqFailed()
+{
+    m_pqFailed = true;
+    m_rendererReason = QStringLiteral("display hardware failed: %1").arg(m_pq->error());
+    m_reasonNamesDevice = false;
+    // Whatever can still be reset
+    stopPq();
+    if (m_item)
+        m_item->setVisible(true);
+    qCWarning(lcOwlfish) << "Renderer" << qPrintable(renderer()) << "-" << qPrintable(m_rendererReason);
+}
+
 void OwlfishController::updateLightSensor()
 {
 #ifdef HAVE_QTSENSORS
@@ -361,8 +509,8 @@ void OwlfishController::updateLightSensor()
 
     if (wanted && !m_lightSensor) {
         m_lightSensor = new QLightSensor(this);
-        // Event driven: sensorfw only delivers readings when the value changes
-        m_lightSensor->setSkipDuplicates(true);
+        // Event driven: sensorfw only delivers readings when the value
+        // changes, and none when a session starts (queryCurrentLux())
         connect(m_lightSensor, &QSensor::readingChanged, this, [this]() {
             if (QLightReading *reading = m_lightSensor->reading())
                 m_cutoff->addReading(reading->lux() * m_alsMultiplier);
@@ -373,13 +521,63 @@ void OwlfishController::updateLightSensor()
         return;
 
     if (wanted && !m_lightSensor->isActive()) {
-        if (!m_lightSensor->start())
+        if (m_lightSensor->start())
+            queryCurrentLux();
+        else
             qCWarning(lcOwlfish) << "Cannot start the ambient light sensor; cut-off inactive";
     } else if (!wanted && m_lightSensor->isActive()) {
         m_lightSensor->stop();
+        ++m_luxQuery;
         m_cutoff->reset();
     }
 #endif
+}
+
+void OwlfishController::querySensorMaximum()
+{
+    const QDBusMessage call = QDBusMessage::createMethodCall(
+            QStringLiteral("com.nokia.SensorService"), QStringLiteral("/SensorManager/alssensor"),
+            QStringLiteral("local.ALSSensor"), QStringLiteral("getAvailableDataRanges"));
+    QDBusPendingCallWatcher *watcher =
+            new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(call), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *watcher) {
+        watcher->deleteLater();
+        double maximum = 0;
+        if (!alsMaximumFromReply(watcher->reply(), &maximum)) {
+            qCWarning(lcOwlfish) << "Cannot read the ambient light sensor's range:" << watcher->error().message();
+            m_settings->publish(QStringLiteral("als_max_lux"), QVariant());
+            return;
+        }
+        const double lux = maximum * m_alsMultiplier;
+        qCInfo(lcOwlfish) << "Ambient light sensor reports up to" << lux << "lux";
+        m_cutoff->setMaximum(lux);
+        m_settings->publish(QStringLiteral("als_max_lux"), lux);
+    });
+}
+
+void OwlfishController::queryCurrentLux()
+{
+    // As mce does; without it, steady bright light counts as dark until the
+    // level changes
+    const int query = ++m_luxQuery;
+    const QDBusMessage call = QDBusMessage::createMethodCall(
+            QStringLiteral("com.nokia.SensorService"), QStringLiteral("/SensorManager/alssensor"),
+            QStringLiteral("local.ALSSensor"), QStringLiteral("lux"));
+    QDBusPendingCallWatcher *watcher =
+            new QDBusPendingCallWatcher(QDBusConnection::systemBus().asyncCall(call), this);
+    connect(watcher, &QDBusPendingCallWatcher::finished, this, [this, query](QDBusPendingCallWatcher *watcher) {
+        watcher->deleteLater();
+        // The sensor was stopped or started again since
+        if (query != m_luxQuery)
+            return;
+        quint32 lux = 0;
+        if (!alsLuxFromReply(watcher->reply(), &lux)) {
+            qCWarning(lcOwlfish) << "Cannot read the current ambient light:" << watcher->error().message();
+            return;
+        }
+        qCInfo(lcOwlfish) << "Ambient light now" << lux * m_alsMultiplier << "lux";
+        m_cutoff->addInitialReading(lux * m_alsMultiplier);
+    });
 }
 
 void OwlfishController::fadeTo(const QVector3D &gain, int durationMs)
@@ -399,4 +597,5 @@ void OwlfishController::animate(const QVariant &progress)
         return;
     const float t = progress.toFloat();
     m_item->setGain(m_fromGain + (m_toGain - m_fromGain) * t);
+    pushPq();
 }

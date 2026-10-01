@@ -4,6 +4,8 @@
 #include "alscalibration.h"
 #include "logging.h"
 
+#include <QDBusArgument>
+#include <QDBusMessage>
 #include <QDir>
 #include <QFile>
 #include <QRegularExpression>
@@ -48,4 +50,43 @@ double alsValueMultiplier(const QString &mceConfigDir)
     }
 
     return multiplier;
+}
+
+bool alsLuxFromReply(const QDBusMessage &reply, quint32 *lux)
+{
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().size() != 1
+            || reply.signature() != QLatin1String("(tu)"))
+        return false;
+    const QDBusArgument argument = reply.arguments().first().value<QDBusArgument>();
+    qulonglong timestamp = 0;
+    uint value = 0;
+    argument.beginStructure();
+    argument >> timestamp >> value;
+    argument.endStructure();
+    *lux = value;
+    return true;
+}
+
+bool alsMaximumFromReply(const QDBusMessage &reply, double *maximum)
+{
+    if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().size() != 1
+            || reply.signature() != QLatin1String("a(ddd)"))
+        return false;
+    const QDBusArgument argument = reply.arguments().first().value<QDBusArgument>();
+    double largest = 0;
+    argument.beginArray();
+    while (!argument.atEnd()) {
+        double min = 0;
+        double max = 0;
+        double resolution = 0;
+        argument.beginStructure();
+        argument >> min >> max >> resolution;
+        argument.endStructure();
+        largest = qMax(largest, max);
+    }
+    argument.endArray();
+    if (largest <= 0)
+        return false;
+    *maximum = largest;
+    return true;
 }

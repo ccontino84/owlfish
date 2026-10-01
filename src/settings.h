@@ -34,7 +34,15 @@ class MDConfItem;
 //   location_manual      bool, default false: sunset and sunrise at latitude
 //                        and longitude instead of the time zone's city
 //   latitude, longitude  degrees, north and east positive
+// Not on the settings page, for troubleshooting:
+//   renderer             "auto" (default): the display hardware on verified
+//                        devices, the GPU elsewhere; "blend": always the
+//                        GPU; "pq": the display hardware also on devices
+//                        not verified (MediaTek only)
 // Written by the plugin, for the settings page:
+//   als_max_lux          the most the light sensor can report, in lux, so the
+//                        settings page offers no threshold it can't reach;
+//                        unset if not known
 //   als_multiplier       the ALS calibration factor, so the settings page can
 //                        show readings in the same units
 //   sun_place            the time zone's city, empty if the time zone has
@@ -79,6 +87,8 @@ public:
     // NaN if not set or out of range
     double latitude() const;
     double longitude() const;
+    // The renderer key, lower case; "auto" if not set
+    QString renderer() const;
 
     void publishAlsMultiplier(double multiplier);
     // Writes one of the keys the plugin writes, if it changed. An invalid
@@ -87,6 +97,9 @@ public:
 #ifndef HAVE_MLITE
     // What was published, for tests
     QVariant published(const QString &key) const { return m_published.value(key); }
+    // Changes from the settings page, for tests
+    void setEnabled(bool enabled);
+    void setRenderer(const QString &renderer);
 #endif
 
 signals:
@@ -107,6 +120,7 @@ private:
     MDConfItem *m_locationManual;
     MDConfItem *m_latitude;
     MDConfItem *m_longitude;
+    MDConfItem *m_renderer;
     QHash<QString, MDConfItem *> m_publishedItems;
 #else
     bool m_enabled;
@@ -122,6 +136,7 @@ private:
     bool m_locationManual;
     double m_latitude;
     double m_longitude;
+    QString m_renderer;
     QVariantMap m_published;
 #endif
 };

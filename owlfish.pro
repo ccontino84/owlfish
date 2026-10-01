@@ -20,7 +20,7 @@ INSTALLS += update_env
 # Settings app page and top menu shortcut (jolla-settings)
 settings_entries.files = settings/owlfish.json
 settings_entries.path = /usr/share/jolla-settings/entries
-settings_pages.files = settings/OwlfishPage.qml settings/EnableSwitch.qml
+settings_pages.files = settings/OwlfishPage.qml settings/DiagnosticsPage.qml settings/EnableSwitch.qml
 settings_pages.path = /usr/share/jolla-settings/pages/owlfish
 INSTALLS += settings_entries settings_pages
 

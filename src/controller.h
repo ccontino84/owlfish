@@ -6,12 +6,14 @@
 
 #include "colorfilteritem.h"
 #include "crashguard.h"
+#include "pqdisplay.h"
 #include "schedule.h"
 #include "sun.h"
 #include "timezonelocation.h"
 
 #include <QObject>
 #include <QPointer>
+#include <QScopedPointer>
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QVector3D>
@@ -26,6 +28,12 @@ class OwlfishSettings;
 // The schedule only affects the colour, the ambient light cut-off only the
 // dimming. With a sunset to sunrise schedule it also publishes today's sun
 // times for the settings page.
+//
+// On verified devices the display hardware applies the filter instead
+// (PqDisplay): the item then only holds the gain and is hidden. The hardware
+// keeps its matrix after the compositor is gone, so it is reset on quit, and
+// the whole state is sent again at every start. If a call fails, the item
+// takes over until the next start.
 class OwlfishController : public QObject
 {
     Q_OBJECT
@@ -34,6 +42,12 @@ public:
     explicit OwlfishController(const QByteArray &windowClass,
                                 const QString &crashGuardPath = CrashGuard::defaultFilePath(),
                                 QObject *parent = nullptr);
+    // Leaves the display hardware at identity
+    ~OwlfishController() override;
+
+    // For tests: the display hardware's service and the file the device is
+    // identified by. Before the window is found; takes ownership.
+    void setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath);
 
     bool isActive() const { return m_active; }
     // For the settings page: "active", "starting" (still looking for the
@@ -41,6 +55,12 @@ public:
     QString status() const;
     // Lets the plugin try again at the next compositor start
     void resetCrashGuard();
+    // "pq" when the display hardware applies the filter, "blend" when the
+    // item draws it, "none" before the window is found
+    QString renderer() const;
+    // For support, several lines: version, status, the renderer and why it
+    // was chosen
+    QString diagnostics() const;
     ColorFilterItem *filterItem() const { return m_item; }
     AmbientCutoff *cutoff() const { return m_cutoff; }
     OwlfishSettings *settings() const { return m_settings; }
@@ -60,10 +80,20 @@ private slots:
     void animate(const QVariant &progress);
     void scheduleTick();
     void displayStatusChanged(const QString &status);
+    void stopPq();
 
 private:
     void attach(QQuickWindow *window);
     void updateLightSensor();
+    // The light level sensorfw already has, for the cut-off
+    void queryCurrentLux();
+    // The most the light sensor can report, for the cut-off and the page
+    void querySensorMaximum();
+    void updateRenderer();
+    // The item's gain, to the display hardware
+    void pushPq();
+    // A call failed: the item takes over until the next start
+    void pqFailed();
     OwlfishSchedule schedule() const;
     qreal currentColourStrength(const QDateTime &now) const;
     void updateSun();
@@ -79,6 +109,9 @@ private:
     AmbientCutoff *m_cutoff;
     QLightSensor *m_lightSensor;
     double m_alsMultiplier;
+    // Counts the sensor's starts and stops, so that a reply to an older
+    // queryCurrentLux() is ignored
+    int m_luxQuery;
     QTimer m_findTimer;
     int m_findAttempts;
     QTimer m_healthyTimer;
@@ -89,6 +122,16 @@ private:
     QVariantAnimation m_animation;
     QVector3D m_fromGain;
     QVector3D m_toGain;
+    QScopedPointer<PqDisplay> m_pq;
+    QString m_hwReleasePath;
+    // The display hardware applies the filter instead of the item
+    bool m_pqActive;
+    // A call failed in this run
+    bool m_pqFailed;
+    QString m_rendererReason;
+    // The reason says which device this is, so diagnostics() leaves that
+    // line out
+    bool m_reasonNamesDevice;
     // The time zone's city, looked up again when the zone changes
     TimeZoneLocation m_zoneLocation;
     // Today's sun times, for the date, zone and location they were

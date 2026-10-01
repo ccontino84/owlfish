@@ -4,6 +4,7 @@
 #include "statusservice.h"
 #include "controller.h"
 #include "logging.h"
+#include <owlfish_version.h>
 
 #include <QDBusError>
 
@@ -45,4 +46,14 @@ void OwlfishStatusService::resetCrashGuard()
 {
     qCInfo(lcOwlfish) << "Crash guard reset from D-Bus";
     m_controller->resetCrashGuard();
+}
+
+QString OwlfishStatusService::renderer() const
+{
+    return m_controller->renderer();
+}
+
+QString OwlfishStatusService::diagnostics() const
+{
+    return m_controller->diagnostics();
 }
