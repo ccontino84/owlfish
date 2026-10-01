@@ -30,6 +30,20 @@ Loaded into lipstick as a Qt generic plugin; no system files are modified.
 Controlled from Settings > Owlfish and a top menu shortcut, or dconf
 under /apps/owlfish/ (see README.md).
 
+%if 0%{?_chum}
+Title: Owlfish
+Type: addon
+DeveloperName: ccontino84
+Categories:
+ - Utility
+Custom:
+  Repo: https://github.com/ccontino84/owlfish
+PackageIcon: https://raw.githubusercontent.com/ccontino84/owlfish/main/icons/icon-m-owlfish.svg
+Links:
+  Homepage: https://github.com/ccontino84/owlfish
+  Bugtracker: https://github.com/ccontino84/owlfish/issues
+%endif
+
 %prep
 %autosetup -n %{name}-%{version}
 
