@@ -121,14 +121,15 @@ void OwlfishController::setDisplayHardware(PqDisplay::Backend *backend, const QS
 QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, qreal dimPercent)
 {
     const QVector3D tint = ColorTemperature::gain(ColorTemperature::partial(temperature, colourStrength));
-    const float dim = float(qBound(0.0, dimPercent, qreal(OwlfishSettings::MaximumDim)) / 100);
+    // double: qreal is float on 32-bit ARM
+    const float dim = float(qBound(0.0, double(dimPercent), double(OwlfishSettings::MaximumDim)) / 100);
     return tint * (1 - dim);
 }
 
 qreal OwlfishController::saturationFactor(qreal colourStrength, int saturationPercent)
 {
-    const qreal strength = qBound(0.0, colourStrength, 1.0);
-    return 1 - strength * (1 - qBound(0, saturationPercent, 100) / 100.0);
+    const double strength = qBound(0.0, double(colourStrength), 1.0);
+    return qreal(1 - strength * (1 - qBound(0, saturationPercent, 100) / 100.0));
 }
 
 qreal OwlfishController::colourStrength(bool scheduled, const OwlfishSchedule &schedule,

@@ -22,7 +22,8 @@ QMatrix3x3 identity()
 QMatrix3x3 saturation(qreal factor)
 {
     // identity · s + luminance · (1 − s), one row per output channel
-    const float s = float(qMax(0.0, factor));
+    // double: qreal is float on 32-bit ARM
+    const float s = float(qMax(0.0, double(factor)));
     QMatrix3x3 matrix;
     for (int row = 0; row < 3; ++row) {
         for (int column = 0; column < 3; ++column)
