@@ -17,6 +17,7 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QStringList>
+#include <QTime>
 #include <QTimeZone>
 
 #include <cmath>
@@ -117,11 +118,17 @@ void OwlfishController::setDisplayHardware(PqDisplay::Backend *backend, const QS
     m_hwReleasePath = hwReleasePath;
 }
 
-QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, int dimPercent)
+QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, qreal dimPercent)
 {
     const QVector3D tint = ColorTemperature::gain(ColorTemperature::partial(temperature, colourStrength));
-    const float dim = qBound(0, dimPercent, int(OwlfishSettings::MaximumDim)) / 100.0f;
+    const float dim = float(qBound(0.0, dimPercent, qreal(OwlfishSettings::MaximumDim)) / 100);
     return tint * (1 - dim);
+}
+
+qreal OwlfishController::saturationFactor(qreal colourStrength, int saturationPercent)
+{
+    const qreal strength = qBound(0.0, colourStrength, 1.0);
+    return 1 - strength * (1 - qBound(0, saturationPercent, 100) / 100.0);
 }
 
 qreal OwlfishController::colourStrength(bool scheduled, const OwlfishSchedule &schedule,
@@ -179,6 +186,19 @@ QString OwlfishController::diagnostics() const
     } else {
         lines << QStringLiteral("display hardware %1")
                  .arg(m_pq->error().isEmpty() ? QStringLiteral("not checked") : m_pq->error());
+    }
+    if (m_settings) {
+        QString saturation = QStringLiteral("saturation %1 %").arg(m_settings->saturation());
+        // Only the display hardware mixes the channels
+        if (m_settings->saturation() < 100 && !m_pqActive)
+            saturation += QStringLiteral(", not supported by this renderer");
+        lines << saturation;
+        const QString when = m_settings->dimWhen();
+        lines << (when == QLatin1String("fixed")
+                  ? QStringLiteral("dimming when fixed %1-%2")
+                    .arg(QTime(0, 0).addSecs(m_settings->dimFrom() * 60).toString(QStringLiteral("HH:mm")),
+                         QTime(0, 0).addSecs(m_settings->dimTo() * 60).toString(QStringLiteral("HH:mm")))
+                  : QStringLiteral("dimming when %1").arg(when));
     }
     return lines.join(QLatin1Char('\n'));
 }
@@ -255,6 +275,8 @@ void OwlfishController::applySettings()
                         << "schedule" << m_settings->scheduled() << m_settings->scheduleFrom()
                         << m_settings->scheduleTo() << m_settings->scheduleTransition()
                         << "sun" << m_settings->scheduleSun() << "manual location" << m_settings->locationManual()
+                        << "saturation" << m_settings->saturation() << "%"
+                        << "dim when" << qPrintable(m_settings->dimWhen()) << m_settings->dimFrom() << m_settings->dimTo()
                         << "renderer" << qPrintable(renderer());
 
     m_cutoff->setThreshold(m_settings->cutoffLux());
@@ -274,6 +296,11 @@ void OwlfishController::cutoffChanged(bool bright)
 
 OwlfishSchedule OwlfishController::schedule() const
 {
+    return schedule(m_settings->scheduleTransition());
+}
+
+OwlfishSchedule OwlfishController::schedule(int transitionMinutes) const
+{
     if (m_settings->scheduleSun()) {
         // No night under the midnight sun, and none without a location. In
         // polar night the colour stays on (currentColourStrength).
@@ -281,10 +308,9 @@ OwlfishSchedule OwlfishController::schedule() const
             return OwlfishSchedule(0, 0, 0);
         // Today's sunrise stands in for tomorrow's: it only moves by minutes
         // a day
-        return OwlfishSchedule(m_sunset, m_sunrise, m_settings->scheduleTransition());
+        return OwlfishSchedule(m_sunset, m_sunrise, transitionMinutes);
     }
-    return OwlfishSchedule(m_settings->scheduleFrom(), m_settings->scheduleTo(),
-                             m_settings->scheduleTransition());
+    return OwlfishSchedule(m_settings->scheduleFrom(), m_settings->scheduleTo(), transitionMinutes);
 }
 
 qreal OwlfishController::currentColourStrength(const QDateTime &now) const
@@ -293,6 +319,23 @@ qreal OwlfishController::currentColourStrength(const QDateTime &now) const
             && m_sunState == SunTimes::PolarNight)
         return 1;
     return colourStrength(m_settings->scheduled(), schedule(), now);
+}
+
+qreal OwlfishController::currentDimStrength(const QDateTime &now) const
+{
+    const QString when = m_settings->dimWhen();
+    if (when == QLatin1String("night_light")) {
+        // Night light's times, without its gradual change: on from the start
+        // (or sunset) to the end (or sunrise)
+        if (!m_settings->scheduled())
+            return 1;
+        if (m_settings->scheduleSun() && m_sunLocated && m_sunState == SunTimes::PolarNight)
+            return 1;
+        return schedule(0).strength(now);
+    }
+    if (when == QLatin1String("fixed"))
+        return OwlfishSchedule(m_settings->dimFrom(), m_settings->dimTo(), 0).strength(now);
+    return 1;
 }
 
 void OwlfishController::updateSun()
@@ -375,8 +418,10 @@ void OwlfishController::publishSun()
 
 void OwlfishController::updateScheduleTimer()
 {
-    // Only the schedule changes the gain over time
-    if (m_settings->enabled() && m_settings->scheduled() && m_displayOn) {
+    // Only the schedules change the gain over time. Dimming with Night light
+    // only follows the colour's schedule.
+    const bool timed = m_settings->scheduled() || m_settings->dimWhen() == QLatin1String("fixed");
+    if (m_settings->enabled() && timed && m_displayOn) {
         if (!m_scheduleTimer.isActive())
             m_scheduleTimer.start();
     } else {
@@ -387,6 +432,8 @@ void OwlfishController::updateScheduleTimer()
 void OwlfishController::scheduleTick()
 {
     updateSun();
+    // The light sensor runs only while the dimming can apply
+    updateLightSensor();
     updateGain(ScheduleStepFadeMs);
 }
 
@@ -408,14 +455,17 @@ void OwlfishController::updateGain(int fadeMs)
         return;
 
     if (!m_settings->enabled()) {
-        fadeTo(QVector3D(1, 1, 1), fadeMs);
+        fadeTo(QVector3D(1, 1, 1), QMatrix3x3(), fadeMs);
         return;
     }
 
-    const qreal colour = currentColourStrength(QDateTime::currentDateTime());
+    const QDateTime now = QDateTime::currentDateTime();
+    const qreal colour = currentColourStrength(now);
     const bool dimSuspended = m_settings->cutoffEnabled() && m_cutoff->isBright();
-    const int dim = dimSuspended ? 0 : m_settings->dim();
-    fadeTo(filterGain(colour, m_settings->temperature(), dim), fadeMs);
+    const qreal dim = dimSuspended ? 0 : m_settings->dim() * currentDimStrength(now);
+    // Desaturated first, then tinted: a warm grey at bedtime
+    fadeTo(filterGain(colour, m_settings->temperature(), dim),
+           ColorMatrix::saturation(saturationFactor(colour, m_settings->saturation())), fadeMs);
 }
 
 void OwlfishController::updateRenderer()
@@ -476,7 +526,7 @@ void OwlfishController::pushPq()
 {
     if (!m_pqActive || !m_item)
         return;
-    if (!m_pq->setMatrix(ColorMatrix::withGain(ColorMatrix::identity(), m_item->gain())))
+    if (!m_pq->setMatrix(ColorMatrix::withGain(m_matrix, m_item->gain())))
         pqFailed();
 }
 
@@ -505,7 +555,8 @@ void OwlfishController::updateLightSensor()
 #ifdef HAVE_QTSENSORS
     // Only read the sensor while it can make a difference. It also stops
     // delivering readings while the display is off.
-    const bool wanted = m_settings->enabled() && m_settings->dim() > 0 && m_settings->cutoffEnabled();
+    const bool wanted = m_settings->enabled() && m_settings->dim() > 0 && m_settings->cutoffEnabled()
+            && currentDimStrength(QDateTime::currentDateTime()) > 0;
 
     if (wanted && !m_lightSensor) {
         m_lightSensor = new QLightSensor(this);
@@ -580,12 +631,14 @@ void OwlfishController::queryCurrentLux()
     });
 }
 
-void OwlfishController::fadeTo(const QVector3D &gain, int durationMs)
+void OwlfishController::fadeTo(const QVector3D &gain, const QMatrix3x3 &matrix, int durationMs)
 {
     m_animation.stop();
     m_fromGain = m_item->gain();
     m_toGain = gain;
-    if (m_fromGain == m_toGain)
+    m_fromMatrix = m_matrix;
+    m_toMatrix = matrix;
+    if (m_fromGain == m_toGain && m_fromMatrix == m_toMatrix)
         return;
     m_animation.setDuration(durationMs);
     m_animation.start();
@@ -597,5 +650,6 @@ void OwlfishController::animate(const QVariant &progress)
         return;
     const float t = progress.toFloat();
     m_item->setGain(m_fromGain + (m_toGain - m_fromGain) * t);
+    m_matrix = m_fromMatrix + (m_toMatrix - m_fromMatrix) * t;
     pushPq();
 }

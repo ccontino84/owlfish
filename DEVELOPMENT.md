@@ -92,6 +92,16 @@ final gain is tint × dimming.
 During a gradual change the colour moves in even steps of mireds between no
 tint and the chosen warmth.
 
+The saturation (`ColorMatrix::saturation`) mixes each colour with the grey
+of the same Rec. 709 luminance, in linear light. It follows the colour's
+schedule like the warmth: at a strength `t` of the schedule the factor is
+`1 − t · (1 − saturation)`. Desaturating comes first and the tint after, so
+a bedtime screen is a warm grey:
+`diag(linearGain(tint × dim)) · saturation`. Only the display hardware can
+mix channels. Blending only multiplies each channel, so with `blend` the
+saturation is ignored, the settings page greys it out, and `diagnostics()`
+says so.
+
 ### Display hardware (`pq`)
 
 On MediaTek devices the vendor's picture quality service
@@ -143,6 +153,17 @@ While Owlfish is enabled with a schedule, the plugin updates the colour every
 30 s while the display is on, and at once when it turns on (mce
 `display_status_ind` on the system bus).
 
+The dimming has its own `dim_when`:
+- `always`;
+- `fixed`: `dim_from` to `dim_to`, an `OwlfishSchedule` without transition,
+  switching with the 1 s fade of the 30 s tick;
+- `night_light`: the colour's times (fixed, or sunset to sunrise; on all day
+  in polar night) without its transitions, so it switches at the start and
+  end however gradual the colour is; all the time when the colour has no
+  schedule.
+
+The light sensor's cut-off applies on top.
+
 ### Sunset to sunrise
 
 `SunTimes` is our own implementation of NOAA's public-domain solar
@@ -183,7 +204,8 @@ reads no files.
 
 `QLightSensor`, event driven (sensorfw delivers a reading only when the value
 changes), only while Owlfish is enabled with dimming and "only in the dark"
-set. sensorfw sends nothing when a session starts, so steady bright light
+set, and the dimming's `dim_when` applies now (checked on every schedule
+tick). sensorfw sends nothing when a session starts, so steady bright light
 would count as dark until it changes; right after starting the sensor the
 plugin asks sensorfw for the value it already has, as mce does
 (`local.ALSSensor.lux` on `com.nokia.SensorService`
@@ -211,7 +233,11 @@ the same factor (logged at startup, and published as
 ```sh
 dconf write /apps/owlfish/enabled true           # default false
 dconf write /apps/owlfish/temperature 3400       # kelvin, 1900-6500, default 4500
+dconf write /apps/owlfish/saturation 40          # percent, 0 (grey)-100, default 100; display hardware only
 dconf write /apps/owlfish/dim 50                 # percent, 0-75, default 0
+dconf write /apps/owlfish/dim_when "'fixed'"     # always (default), fixed or night_light
+dconf write /apps/owlfish/dim_from 1320          # with fixed: minutes after midnight, default 1260
+dconf write /apps/owlfish/dim_to 390             # default 420
 dconf write /apps/owlfish/dim_cutoff false       # default true
 dconf write /apps/owlfish/dim_cutoff_lux 500     # 100-50000, default 1000
 dconf write /apps/owlfish/schedule true          # warm only at night, default false
@@ -260,7 +286,10 @@ lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
 guard, the D-Bus status, `update-env` against sample environment files,
 the display hardware with a fake PQ service (fixed point, device list,
 selection, fades, resets, handover, failure, crash guard; without
-libgbinder on the host, `pq` falls back to `blend`),
+libgbinder on the host, `pq` falls back to `blend`), the saturation
+(matrix, with the schedule, through the fake PQ service, ignored with
+`blend`), the dimming's `dim_when` (always, fixed, with Night light's times
+but not its gradual change),
 and loading through `QGenericPluginFactory`, including a sun schedule
 at fake polar coordinates (`OWLFISH_LOCATION_MANUAL=1 OWLFISH_LATITUDE=89.9`).
 

@@ -5,11 +5,30 @@
 
 #include <cmath>
 
+namespace {
+
+// Rec. 709 / sRGB luminance of linear red, green and blue
+const float Luminance[3] = { 0.2126f, 0.7152f, 0.0722f };
+
+}
+
 namespace ColorMatrix {
 
 QMatrix3x3 identity()
 {
     return QMatrix3x3();
+}
+
+QMatrix3x3 saturation(qreal factor)
+{
+    // identity · s + luminance · (1 − s), one row per output channel
+    const float s = float(qMax(0.0, factor));
+    QMatrix3x3 matrix;
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column)
+            matrix(row, column) = (row == column ? s : 0) + (1 - s) * Luminance[column];
+    }
+    return matrix;
 }
 
 qreal linearGain(qreal encodedGain)

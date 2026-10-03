@@ -4,12 +4,14 @@ Easier on the eyes in the evening: Owlfish tints the Sailfish OS display
 warmer and can make it darker than its lowest brightness, like Android's
 *Night Light* and *Extra Dim* in one.
 
-- **Warmth** from no tint (6500 K) down to no blue at all (1900 K), all the
-  time, between fixed times, or from sunset to sunrise, with a gradual change
-  at the start and end.
-- **Dimming** on top of the current brightness, by up to 75 %, optionally only
-  in the dark: the light sensor turns it off in bright light, for example
-  outdoors, and back on when it gets darker.
+- **Night light**: warmth from no tint (6500 K) down to no blue at all
+  (1900 K), all the time, between fixed times, or from sunset to sunrise,
+  with a gradual change at the start and end. Less saturation, down to
+  grey, for bedtime (Jolla Phone).
+- **Dimming** on top of the current brightness, by up to 75 %, all the time,
+  between fixed times or with Night light, optionally only in the dark: the
+  light sensor turns it off in bright light, for example outdoors, and back
+  on when it gets darker.
 - One switch, in Settings and as a top menu shortcut.
 
 Black stays black: the filter multiplies each colour channel, so it does not
@@ -60,26 +62,32 @@ systemctl --user restart lipstick     # restarts the home screen; closes open ap
 
 ## Using it
 
-**Settings > Owlfish.** Options that do not apply are greyed out, not
-hidden.
+**Settings > Owlfish.** Options appear when the choice above them needs
+them (the times with *Fixed times*, for example). What the phone can't do
+is greyed out, with the reason.
 
 - **Enabled**: the master switch, also available as the top menu shortcut
   (tap to toggle, long press to open the page).
-- **Colour temperature**
+- **Night light**
   - **Warmth**: 6500 K (no tint) to 1900 K (no blue), default 4500 K.
+  - **Saturation**: 100 % (no change) down to 0 % (grey), for bedtime. It
+    needs the display hardware, so only on the Jolla Phone.
   - **When**: *All the time*, *Fixed times* (default 21:00-07:00) or
     *Sunset to sunrise*; neutral the rest of the day. **Gradual change**
     (off, 30 min, 1 h, 2 h) warms up from the start and is back to neutral
-    at the end.
+    at the end. Warmth and saturation follow it together.
 - **Dimming**
   - **Darker than the current brightness**: off, or 5-75 %.
+  - **When**: *All the time* (default), *Fixed times* (its own) or *With
+    Night light* (Night light's times). Either way it switches at the start
+    and end, without a gradual change.
   - **Only in the dark**: the dimming fades out above the chosen light
     level and comes back below 75 % of it. A meter shows the light level
     now. The scale ends at the most your phone's light sensor can measure
     (on the Jolla Phone about 2200 lux).
 
-The schedule only affects the colour and the light sensor only the dimming:
-warm at night, darker in the dark.
+The light sensor only affects the dimming: with a schedule, the dimming
+applies when both the time and the light say so.
 
 ### Sunset to sunrise
 

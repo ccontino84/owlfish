@@ -11,6 +11,9 @@
 namespace ColorMatrix {
 
 QMatrix3x3 identity();
+// Scales the saturation around the grey of the same luminance (Rec. 709):
+// 1 is no change, 0 is grey. Every row sums to 1, so white stays white.
+QMatrix3x3 saturation(qreal factor);
 
 // A gain that multiplies sRGB-encoded values, as the same gain on linear
 // light: what the display hardware needs for Owlfish's gains

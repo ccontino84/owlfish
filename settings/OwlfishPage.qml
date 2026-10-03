@@ -7,8 +7,10 @@ import Nemo.Configuration 1.0
 import Nemo.DBus 2.0
 import QtSensors 5.0
 
-// Every option is always shown in the same place; options that do not apply
-// are greyed out, and their text says why
+// Options that only matter after a choice on this page are hidden until it
+// is made (the times with "Fixed times", the location with "Sunset to
+// sunrise"). Options that something else rules out, such as the device,
+// stay in place, greyed out, and their text says why.
 Page {
     id: page
 
@@ -20,6 +22,8 @@ Page {
 
         property bool enabled: false
         property int temperature: 4500
+        // Percent; 100 is no change, 0 grey
+        property int saturation: 100
         property bool schedule: false
         // Sunset to sunrise instead of the fixed times
         property bool schedule_sun: false
@@ -33,6 +37,10 @@ Page {
         property real latitude: 1000
         property real longitude: 1000
         property int dim: 0
+        // "always", "fixed" (dim_from to dim_to) or "night_light"
+        property string dim_when: "always"
+        property int dim_from: 1260
+        property int dim_to: 420
         property bool dim_cutoff: true
         property int dim_cutoff_lux: 1000
         // Written by the plugin from mce's AlsValueMultiplier, so that the
@@ -88,6 +96,16 @@ Page {
 
     readonly property bool dimming: config.dim > 0
     readonly property bool cutoffApplies: dimming && config.dim_cutoff
+    // Same order as the dimming's "When" menu
+    readonly property var dimWhenNames: ["always", "fixed", "night_light"]
+
+    // OwlfishController::renderer() of the running plugin: "pq" (display
+    // hardware), "blend" (GPU), "none" before it has a window; empty
+    // without a reply
+    property string pluginRenderer: ""
+    // Only the display hardware can change the saturation. Unknown counts as
+    // possible, so the setting stays editable while Owlfish isn't running.
+    readonly property bool saturationSupported: pluginRenderer !== "blend"
 
     // Minutes after midnight now, for the schedule status line
     property int nowMinutes: currentMinutes()
@@ -170,6 +188,8 @@ Page {
                              page.pluginStatus = status
                              plugin.typedCall("version", [],
                                               function(version) { page.pluginVersion = version })
+                             plugin.typedCall("renderer", [],
+                                              function(renderer) { page.pluginRenderer = renderer })
                          },
                          function() { page.checkEnvironmentFile() })
     }
@@ -480,7 +500,7 @@ Page {
             }
 
             SectionHeader {
-                text: "Colour temperature"
+                text: "Night light"
             }
 
             Slider {
@@ -505,6 +525,40 @@ Page {
                     if (kelvin !== config.temperature)
                         config.temperature = kelvin
                 }
+            }
+
+            Slider {
+                enabled: page.saturationSupported
+                opacity: enabled ? 1.0 : Theme.opacityLow
+                width: parent.width
+                label: "Saturation"
+                minimumValue: 0
+                maximumValue: 100
+                stepSize: 5
+                value: config.saturation
+                valueText: {
+                    var saturation = Math.round(sliderValue)
+                    if (saturation === 100)
+                        return "100 % · no change"
+                    if (saturation === 0)
+                        return "0 % · grey"
+                    return saturation + " %"
+                }
+                onSliderValueChanged: {
+                    var saturation = Math.round(sliderValue)
+                    if (saturation !== config.saturation)
+                        config.saturation = saturation
+                }
+            }
+
+            Label {
+                visible: !page.saturationSupported
+                x: Theme.horizontalPageMargin
+                width: parent.width - 2 * Theme.horizontalPageMargin
+                wrapMode: Text.Wrap
+                font.pixelSize: Theme.fontSizeSmall
+                color: Theme.secondaryHighlightColor
+                text: "Not supported on this device."
             }
 
             ComboBox {
@@ -535,23 +589,21 @@ Page {
             }
 
             ValueButton {
-                enabled: page.whenIndex === 1
-                opacity: enabled ? 1.0 : Theme.opacityLow
+                visible: page.whenIndex === 1
                 label: "Start"
                 value: page.formatMinutes(config.schedule_from)
                 onClicked: page.pickTime("schedule_from")
             }
 
             ValueButton {
-                enabled: page.whenIndex === 1
-                opacity: enabled ? 1.0 : Theme.opacityLow
+                visible: page.whenIndex === 1
                 label: "End"
                 value: page.formatMinutes(config.schedule_to)
                 onClicked: page.pickTime("schedule_to")
             }
 
             Label {
-                opacity: page.sunSchedule ? 1.0 : Theme.opacityLow
+                visible: page.sunSchedule
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
                 wrapMode: Text.Wrap
@@ -563,7 +615,7 @@ Page {
             // Silica has no checkbox; the switch sits above the field
             // because both do not fit on one row
             TextSwitch {
-                enabled: page.sunSchedule
+                visible: page.sunSchedule
                 text: "Set location manually"
                 description: "For sunset to sunrise: your own coordinates instead of your time zone's city."
                 checked: config.location_manual
@@ -582,9 +634,9 @@ Page {
                 readonly property bool editable: page.sunSchedule && config.location_manual
                 readonly property bool valid: page.parseCoordinates(text) !== null
 
+                // The time zone's city is in the line above
+                visible: editable
                 width: parent.width
-                // Greyed out and read-only unless set manually
-                enabled: editable
                 label: "Coordinates"
                 placeholderText: "Latitude, longitude"
                 inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
@@ -613,8 +665,7 @@ Page {
             }
 
             ComboBox {
-                enabled: config.schedule
-                opacity: enabled ? 1.0 : Theme.opacityLow
+                visible: config.schedule
                 label: "Gradual change"
                 description: "Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise."
                 currentIndex: Math.max(0, page.transitionSteps.indexOf(config.schedule_transition))
@@ -629,6 +680,7 @@ Page {
             }
 
             Label {
+                visible: config.schedule
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
                 wrapMode: Text.Wrap
@@ -656,10 +708,46 @@ Page {
                 }
             }
 
+            ComboBox {
+                visible: page.dimming
+                label: "When"
+                currentIndex: Math.max(0, page.dimWhenNames.indexOf(config.dim_when))
+
+                menu: ContextMenu {
+                    // Same order as page.dimWhenNames
+                    MenuItem {
+                        text: "All the time"
+                        onClicked: config.dim_when = "always"
+                    }
+                    MenuItem {
+                        text: "Fixed times"
+                        onClicked: config.dim_when = "fixed"
+                    }
+                    MenuItem {
+                        text: "With Night light"
+                        onClicked: config.dim_when = "night_light"
+                    }
+                }
+            }
+
+            ValueButton {
+                visible: page.dimming && config.dim_when === "fixed"
+                label: "Start"
+                value: page.formatMinutes(config.dim_from)
+                onClicked: page.pickTime("dim_from")
+            }
+
+            ValueButton {
+                visible: page.dimming && config.dim_when === "fixed"
+                label: "End"
+                value: page.formatMinutes(config.dim_to)
+                onClicked: page.pickTime("dim_to")
+            }
+
             TextSwitch {
-                enabled: page.dimming
+                visible: page.dimming
                 text: "Only in the dark"
-                description: "Uses the light sensor to skip the dimming in bright light, for example outdoors or in a well-lit room, and dims again when it gets darker. Applies when dimming is set above."
+                description: "Uses the light sensor to skip the dimming in bright light, for example outdoors or in a well-lit room, and dims again when it gets darker."
                 checked: config.dim_cutoff
                 automaticCheck: false
                 onClicked: config.dim_cutoff = !checked
@@ -668,8 +756,7 @@ Page {
             Slider {
                 id: thresholdSlider
 
-                enabled: page.cutoffApplies
-                opacity: enabled ? 1.0 : Theme.opacityLow
+                visible: page.cutoffApplies
                 width: parent.width
                 label: "Bright light starts at"
                 minimumValue: 0
@@ -687,8 +774,10 @@ Page {
             // Read-only meter on the same scale as the threshold above, so
             // the two can be compared directly
             Slider {
+                visible: page.cutoffApplies
+                // Read-only, but not greyed out
                 enabled: false
-                opacity: page.cutoffApplies ? 1.0 : Theme.opacityLow
+                opacity: 1.0
                 width: parent.width
                 label: "Light here now"
                 minimumValue: 0
@@ -699,7 +788,7 @@ Page {
             }
 
             Label {
-                opacity: page.cutoffApplies ? 1.0 : Theme.opacityLow
+                visible: page.cutoffApplies
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
                 wrapMode: Text.Wrap

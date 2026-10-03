@@ -11,6 +11,7 @@
 #include "sun.h"
 #include "timezonelocation.h"
 
+#include <QGenericMatrix>
 #include <QObject>
 #include <QPointer>
 #include <QScopedPointer>
@@ -67,7 +68,9 @@ public:
 
     // Warm tint, colourStrength of the way from neutral to the temperature,
     // times the dimming
-    static QVector3D filterGain(qreal colourStrength, int temperature, int dimPercent);
+    static QVector3D filterGain(qreal colourStrength, int temperature, qreal dimPercent);
+    // The saturation factor, colourStrength of the way from 1 to the setting
+    static qreal saturationFactor(qreal colourStrength, int saturationPercent);
     // 1 without a schedule; with one, following it and its transitions
     static qreal colourStrength(bool scheduled, const OwlfishSchedule &schedule,
                                 const QDateTime &now);
@@ -94,13 +97,17 @@ private:
     void pushPq();
     // A call failed: the item takes over until the next start
     void pqFailed();
+    // The colour's window, with its transitions or another length of them
     OwlfishSchedule schedule() const;
+    OwlfishSchedule schedule(int transitionMinutes) const;
     qreal currentColourStrength(const QDateTime &now) const;
+    // 0 or 1: whether the dimming applies now, by the dim_when setting
+    qreal currentDimStrength(const QDateTime &now) const;
     void updateSun();
     void publishSun();
     void updateScheduleTimer();
     void updateGain(int fadeMs);
-    void fadeTo(const QVector3D &gain, int durationMs);
+    void fadeTo(const QVector3D &gain, const QMatrix3x3 &matrix, int durationMs);
 
     QByteArray m_windowClass;
     CrashGuard m_guard;
@@ -122,6 +129,11 @@ private:
     QVariantAnimation m_animation;
     QVector3D m_fromGain;
     QVector3D m_toGain;
+    // The saturation, faded like the gain; applied by the display hardware
+    // only, before the gain
+    QMatrix3x3 m_matrix;
+    QMatrix3x3 m_fromMatrix;
+    QMatrix3x3 m_toMatrix;
     QScopedPointer<PqDisplay> m_pq;
     QString m_hwReleasePath;
     // The display hardware applies the filter instead of the item

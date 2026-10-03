@@ -19,7 +19,15 @@ class MDConfItem;
 //   enabled              bool, default false: master switch
 //   temperature          kelvin, 1900 (no blue left) to 6500 (no tint),
 //                        default 4500
+//   saturation           percent, 0 (grey) to 100 (no change), default 100;
+//                        with the colour, so it follows the schedule
+//                        (bedtime); display hardware only
 //   dim                  extra dimming in percent, 0 to MaximumDim, default 0
+//   dim_when             when the dimming applies: "always" (default),
+//                        "fixed" (dim_from to dim_to, no transition) or
+//                        "night_light" (with the colour's schedule and its
+//                        transitions)
+//   dim_from, dim_to     minutes after midnight, defaults 21:00 and 07:00
 //   dim_cutoff           bool, default true: no extra dimming in bright light
 //   dim_cutoff_lux       ambient light level that counts as bright, 100 to
 //                        50000, default 1000
@@ -70,6 +78,7 @@ public:
     static const int DefaultTo = 7 * 60;
     static const int DefaultTransition = 60;
     static const int MaximumTransition = 120;
+    static const int DefaultSaturation = 100;
 
     explicit OwlfishSettings(QObject *parent = nullptr);
 
@@ -89,6 +98,12 @@ public:
     double longitude() const;
     // The renderer key, lower case; "auto" if not set
     QString renderer() const;
+    // Percent
+    int saturation() const;
+    // "always", "fixed" or "night_light"; "always" if anything else
+    QString dimWhen() const;
+    int dimFrom() const;
+    int dimTo() const;
 
     void publishAlsMultiplier(double multiplier);
     // Writes one of the keys the plugin writes, if it changed. An invalid
@@ -100,6 +115,8 @@ public:
     // Changes from the settings page, for tests
     void setEnabled(bool enabled);
     void setRenderer(const QString &renderer);
+    void setSaturation(int saturation);
+    void setDimWhen(const QString &when);
 #endif
 
 signals:
@@ -121,6 +138,10 @@ private:
     MDConfItem *m_latitude;
     MDConfItem *m_longitude;
     MDConfItem *m_renderer;
+    MDConfItem *m_saturation;
+    MDConfItem *m_dimWhen;
+    MDConfItem *m_dimFrom;
+    MDConfItem *m_dimTo;
     QHash<QString, MDConfItem *> m_publishedItems;
 #else
     bool m_enabled;
@@ -137,6 +158,10 @@ private:
     double m_latitude;
     double m_longitude;
     QString m_renderer;
+    int m_saturation;
+    QString m_dimWhen;
+    int m_dimFrom;
+    int m_dimTo;
     QVariantMap m_published;
 #endif
 };

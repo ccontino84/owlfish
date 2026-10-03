@@ -112,6 +112,23 @@ private:
 const QVector<int> PqIdentity = { 2048, 0, 0, 0, 2048, 0, 0, 0, 2048 };
 const QVector<int> PqNeutralGain = { 2048, 2048, 2048 };
 
+QVector<int> pqMatrixOf(const QMatrix3x3 &matrix)
+{
+    int values[9];
+    PqDisplay::toFixed(matrix, values);
+    QVector<int> result;
+    for (int value : values)
+        result << value;
+    return result;
+}
+
+// Minutes after midnight, offset from now
+int minutesFromNow(int offset)
+{
+    const QTime now = QTime::currentTime();
+    return ((now.hour() * 60 + now.minute() + offset) % (24 * 60) + 24 * 60) % (24 * 60);
+}
+
 QVector<int> pqMatrixFor(const QVector3D &gain)
 {
     int values[9];
@@ -233,6 +250,11 @@ private slots:
     void rendererPqDrawsNothing();
     void rendererHandover();
     void rendererMasterSwitch();
+    void saturationMatrix();
+    void saturationThroughPq();
+    void saturationWithBlend();
+    void dimmingWhen_data();
+    void dimmingWhen();
     void rendererFallback();
     void rendererResetOnQuit();
     void rendererCrashGuard();
@@ -1157,6 +1179,143 @@ void tst_Owlfish::rendererSelection()
         QCOMPARE(log.attempts, 0);
         QVERIFY(controller->filterItem()->isVisible());
     }
+}
+
+void tst_Owlfish::saturationMatrix()
+{
+    // 1 is no change, 0 every channel the Rec. 709 luminance
+    QCOMPARE(ColorMatrix::saturation(1), ColorMatrix::identity());
+    const float luminance[3] = { 0.2126f, 0.7152f, 0.0722f };
+    const QMatrix3x3 grey = ColorMatrix::saturation(0);
+    for (int row = 0; row < 3; ++row) {
+        float sum = 0;
+        for (int column = 0; column < 3; ++column) {
+            QVERIFY(qFuzzyCompare(grey(row, column), luminance[column]));
+            sum += ColorMatrix::saturation(0.4)(row, column);
+        }
+        // White stays white
+        QVERIFY(qAbs(sum - 1) < 1e-6f);
+    }
+
+    // With the colour: the schedule's strength of the way to the setting
+    QCOMPARE(OwlfishController::saturationFactor(1, 100), 1.0);
+    QCOMPARE(OwlfishController::saturationFactor(1, 0), 0.0);
+    QCOMPARE(OwlfishController::saturationFactor(0.5, 0), 0.5);
+    QCOMPARE(OwlfishController::saturationFactor(0, 40), 1.0);
+    QVERIFY(qFuzzyCompare(OwlfishController::saturationFactor(1, 40), 0.4));
+}
+
+void tst_Owlfish::saturationThroughPq()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_SATURATION", "40");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    qunsetenv("OWLFISH_SATURATION");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+
+    // Desaturated, then dimmed
+    const QVector3D gain(0.5f, 0.5f, 0.5f);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(ColorMatrix::saturation(0.4), gain)));
+    QVERIFY(controller->diagnostics().split(QLatin1Char('\n')).contains(QStringLiteral("saturation 40 %")));
+
+    // A change fades, like the gain
+    const int matrices = log.matrices.size();
+    controller->settings()->setSaturation(100);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixFor(gain));
+    QVERIFY(log.matrices.size() > matrices + 2);
+
+    // Off: identity
+    controller->settings()->setSaturation(0);
+    controller->settings()->setEnabled(false);
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+}
+
+void tst_Owlfish::saturationWithBlend()
+{
+    // Blending can't mix the channels: the gain alone, and the diagnostics
+    // say so
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_SATURATION", "40");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(
+            dir, new FakePq(&log), QByteArray("ID=xqbt52\n")));
+    qunsetenv("OWLFISH_SATURATION");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QVERIFY(log.matrices.isEmpty());
+    compare(grab(view.data()), Orange, QColor(128, 64, 32));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nsaturation 40 %, not supported by this renderer")));
+}
+
+void tst_Owlfish::dimmingWhen_data()
+{
+    QTest::addColumn<QByteArray>("when");
+    // Night light's schedule, or none
+    QTest::addColumn<bool>("scheduled");
+    // The window around now, or one that has not started
+    QTest::addColumn<bool>("inside");
+    // Night light's gradual change, in minutes
+    QTest::addColumn<int>("transition");
+    QTest::addColumn<bool>("dimmed");
+
+    QTest::newRow("always") << QByteArray("always") << true << false << 0 << true;
+    QTest::newRow("fixed, inside") << QByteArray("fixed") << false << true << 0 << true;
+    QTest::newRow("fixed, outside") << QByteArray("fixed") << false << false << 0 << false;
+    QTest::newRow("with Night light, inside") << QByteArray("night_light") << true << true << 0 << true;
+    QTest::newRow("with Night light, outside") << QByteArray("night_light") << true << false << 0 << false;
+    // Night light all the time: so is the dimming
+    QTest::newRow("with Night light, no schedule") << QByteArray("night_light") << false << false << 0 << true;
+    // Fully dimmed while the colour is still fading in: the times, not the
+    // gradual change
+    QTest::newRow("with Night light, gradual change") << QByteArray("night_light") << true << true << 120 << true;
+}
+
+void tst_Owlfish::dimmingWhen()
+{
+    QFETCH(QByteArray, when);
+    QFETCH(bool, scheduled);
+    QFETCH(bool, inside);
+    QFETCH(int, transition);
+    QFETCH(bool, dimmed);
+
+    const QByteArray from = QByteArray::number(minutesFromNow(inside ? -60 : 60));
+    const QByteArray to = QByteArray::number(minutesFromNow(inside ? 60 : 120));
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_DIM_CUTOFF", "0");
+    qputenv("OWLFISH_DIM_WHEN", when);
+    qputenv("OWLFISH_DIM_FROM", from);
+    qputenv("OWLFISH_DIM_TO", to);
+    qputenv("OWLFISH_SCHEDULE", scheduled ? "1" : "0");
+    qputenv("OWLFISH_SCHEDULE_FROM", from);
+    qputenv("OWLFISH_SCHEDULE_TO", to);
+    qputenv("OWLFISH_SCHEDULE_TRANSITION", QByteArray::number(transition));
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(
+            dir, new FakePq(&log), QByteArray("ID=xqbt52\n")));
+    for (const char *name : { "OWLFISH_DIM_CUTOFF", "OWLFISH_DIM_WHEN", "OWLFISH_DIM_FROM", "OWLFISH_DIM_TO",
+                              "OWLFISH_SCHEDULE", "OWLFISH_SCHEDULE_FROM", "OWLFISH_SCHEDULE_TO",
+                              "OWLFISH_SCHEDULE_TRANSITION" })
+        qunsetenv(name);
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+
+    const float gain = dimmed ? 0.5f : 1.0f;
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(gain, gain, gain));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ndimming when ")));
 }
 
 void tst_Owlfish::rendererPqDrawsNothing()

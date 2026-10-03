@@ -65,6 +65,21 @@ QString normalizeRenderer(const QString &value)
     return renderer.isEmpty() ? QStringLiteral("auto") : renderer;
 }
 
+int clampSaturation(double value)
+{
+    if (!std::isfinite(value))
+        return OwlfishSettings::DefaultSaturation;
+    return qBound(0, int(std::lround(value)), 100);
+}
+
+QString normalizeDimWhen(const QString &value)
+{
+    const QString when = value.trimmed().toLower();
+    if (when == QLatin1String("fixed") || when == QLatin1String("night_light"))
+        return when;
+    return QStringLiteral("always");
+}
+
 }
 
 #ifdef HAVE_MLITE
@@ -101,12 +116,16 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_latitude(item("latitude", this))
     , m_longitude(item("longitude", this))
     , m_renderer(item("renderer", this))
+    , m_saturation(item("saturation", this))
+    , m_dimWhen(item("dim_when", this))
+    , m_dimFrom(item("dim_from", this))
+    , m_dimTo(item("dim_to", this))
 {
     // Not the keys only the plugin writes
     for (MDConfItem *item : { m_enabled, m_temperature, m_dim, m_cutoffEnabled, m_cutoffLux,
                               m_scheduled, m_scheduleSun, m_scheduleFrom, m_scheduleTo,
                               m_scheduleTransition, m_locationManual, m_latitude, m_longitude,
-                              m_renderer })
+                              m_renderer, m_saturation, m_dimWhen, m_dimFrom, m_dimTo })
         connect(item, &MDConfItem::valueChanged, this, &OwlfishSettings::changed);
 }
 
@@ -180,6 +199,26 @@ QString OwlfishSettings::renderer() const
     return normalizeRenderer(m_renderer->value().toString());
 }
 
+int OwlfishSettings::saturation() const
+{
+    return clampSaturation(m_saturation->value(DefaultSaturation).toDouble());
+}
+
+QString OwlfishSettings::dimWhen() const
+{
+    return normalizeDimWhen(m_dimWhen->value().toString());
+}
+
+int OwlfishSettings::dimFrom() const
+{
+    return clampMinuteOfDay(m_dimFrom->value(DefaultFrom).toDouble(), DefaultFrom);
+}
+
+int OwlfishSettings::dimTo() const
+{
+    return clampMinuteOfDay(m_dimTo->value(DefaultTo).toDouble(), DefaultTo);
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
     publish(QStringLiteral("als_multiplier"), multiplier);
@@ -228,6 +267,10 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_latitude(checkDegrees(env("latitude", std::numeric_limits<double>::quiet_NaN()), 90))
     , m_longitude(checkDegrees(env("longitude", std::numeric_limits<double>::quiet_NaN()), 180))
     , m_renderer(normalizeRenderer(QString::fromLocal8Bit(qgetenv("OWLFISH_RENDERER"))))
+    , m_saturation(clampSaturation(env("saturation", DefaultSaturation)))
+    , m_dimWhen(normalizeDimWhen(QString::fromLocal8Bit(qgetenv("OWLFISH_DIM_WHEN"))))
+    , m_dimFrom(clampMinuteOfDay(env("dim_from", DefaultFrom), DefaultFrom))
+    , m_dimTo(clampMinuteOfDay(env("dim_to", DefaultTo), DefaultTo))
 {
 }
 
@@ -301,6 +344,26 @@ QString OwlfishSettings::renderer() const
     return m_renderer;
 }
 
+int OwlfishSettings::saturation() const
+{
+    return m_saturation;
+}
+
+QString OwlfishSettings::dimWhen() const
+{
+    return m_dimWhen;
+}
+
+int OwlfishSettings::dimFrom() const
+{
+    return m_dimFrom;
+}
+
+int OwlfishSettings::dimTo() const
+{
+    return m_dimTo;
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
     publish(QStringLiteral("als_multiplier"), multiplier);
@@ -323,6 +386,18 @@ void OwlfishSettings::setEnabled(bool enabled)
 void OwlfishSettings::setRenderer(const QString &renderer)
 {
     m_renderer = normalizeRenderer(renderer);
+    emit changed();
+}
+
+void OwlfishSettings::setSaturation(int saturation)
+{
+    m_saturation = clampSaturation(saturation);
+    emit changed();
+}
+
+void OwlfishSettings::setDimWhen(const QString &when)
+{
+    m_dimWhen = normalizeDimWhen(when);
     emit changed();
 }
 
