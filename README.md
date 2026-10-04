@@ -7,7 +7,7 @@ warmer and can make it darker than its lowest brightness, like Android's
 - **Night light**: warmth from no tint (6500 K) down to no blue at all
   (1900 K), all the time, between fixed times, or from sunset to sunrise,
   with a gradual change at the start and end. Less saturation, down to
-  grey, for bedtime (Jolla Phone).
+  grey, for bedtime.
 - **Dimming** on top of the current brightness, by up to 75 %, all the time,
   between fixed times or with Night light, optionally only in the dark: the
   light sensor turns it off in bright light, for example outdoors, and back
@@ -70,8 +70,9 @@ is greyed out, with the reason.
   (tap to toggle, long press to open the page).
 - **Night light**
   - **Warmth**: 6500 K (no tint) to 1900 K (no blue), default 4500 K.
-  - **Saturation**: 100 % (no change) down to 0 % (grey), for bedtime. It
-    needs the display hardware, so only on the Jolla Phone.
+  - **Saturation**: 100 % (no change) down to 0 % (grey), for bedtime. On
+    devices other than the Jolla Phone it needs a graphics processor that
+    supports it (most do); otherwise it is disabled.
   - **When**: *All the time*, *Fixed times* (default 21:00-07:00) or
     *Sunset to sunrise*; neutral the rest of the day. **Gradual change**
     (off, 30 min, 1 h, 2 h) warms up from the start and is back to neutral

@@ -45,14 +45,16 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   after installation also looks like the latter; reinstalling runs the
   check again.
 - **Filter:** one full-screen quad with a public `QSGMaterial`. Its shader's
-  `activate()` sets `glBlendFunc(GL_ZERO, GL_SRC_COLOR)` and `deactivate()`
+  `activate()` sets `glBlendFunc(GL_ZERO, GL_SRC_COLOR)` (or, for `fetch`,
+  `GL_ONE, GL_ZERO` with the destination alpha masked) and `deactivate()`
   restores the renderer's premultiplied blending. It does not use the private
   `QSGRenderNode`, which in Qt 5.6 turns off the renderer's depth-buffer
   optimisation for the whole compositor scene. With gain (1, 1, 1) the node
   is removed.
 - **Renderer:** on verified devices the display hardware applies the gain
   instead (`pq`), at no GPU cost; everywhere else the item draws it
-  (`blend`). See below.
+  (`fetch` while the saturation is below 100 %, `blend` otherwise). See
+  below.
 - **Scope:** the plugin only activates inside the `lipstick` executable, even
   if the environment variable leaks into child processes. It is built with
   hidden symbols (it exports only `qt_plugin_*`), so none of its symbols can
@@ -66,9 +68,9 @@ Source layout (`src/`):
 |---|---|
 | `plugin.cpp` | `QGenericPlugin` entry, process/window options |
 | `controller.*` | finds the window, combines settings, schedule and light sensor into a gain, fades |
-| `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and the multiply-blend material |
+| `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and its material: multiply blend, or framebuffer fetch with the saturation |
 | `pqdisplay.*` | the display hardware's colour matrix through MediaTek's PQ service |
-| `colormatrix.*` | the gain in linear light, for the display hardware |
+| `colormatrix.*` | the saturation matrix, and the gain in linear light for the display hardware |
 | `colortemperature.*` | kelvin → per-channel gain |
 | `schedule.*` | the daily window and its transitions |
 | `sun.*` | sunset and sunrise (NOAA's solar equations) |
@@ -97,10 +99,32 @@ of the same Rec. 709 luminance, in linear light. It follows the colour's
 schedule like the warmth: at a strength `t` of the schedule the factor is
 `1 − t · (1 − saturation)`. Desaturating comes first and the tint after, so
 a bedtime screen is a warm grey:
-`diag(linearGain(tint × dim)) · saturation`. Only the display hardware can
-mix channels. Blending only multiplies each channel, so with `blend` the
-saturation is ignored, the settings page greys it out, and `diagnostics()`
-says so.
+`diag(linearGain(tint × dim)) · saturation`. Only the display hardware and
+`fetch` can mix channels. Blending only multiplies each channel, so with
+`blend` (forced, or where fetch doesn't work) the saturation is ignored,
+the settings page greys it out, and `diagnostics()` says so.
+
+### GPU (`fetch` and `blend`)
+
+Where the display hardware isn't used, the item draws the filter:
+
+- **`fetch`** while the saturation is below 100 %: the shader reads the
+  pixel with `GL_ARM_shader_framebuffer_fetch` (`gl_LastFragColorARM`,
+  Mali) or `GL_EXT_shader_framebuffer_fetch` (`gl_LastFragData[0]`),
+  replaces blending, keeps the destination alpha (`glColorMask`), applies
+  the matrix in approximately linear light with gamma 2.0 for the sRGB
+  curves (`sqrt(matrix · dst²)`, mediump, no `pow()`), then the gain in
+  encoded space, as `blend` does. Within about 1 ΔE00 of the exact linear
+  result on average; on the Xperia 10 III it costs about 1 % of frames. The
+  exact sRGB curves cost about 5 %, and the matrix on the encoded values
+  turned desaturated pure colours much darker (pure red at 0 %: lightness
+  23 instead of 53).
+- **`blend`** for the gain alone: cheaper on Mali GPUs (about 80 against
+  75 fps while swiping on the Jolla Phone).
+- Whether the extension exists and the shader links is checked at the
+  GPU's first frame (never while the display hardware is used). Until
+  then `renderer()` says `fetch`; if it doesn't work, `blend` draws
+  everything, the saturation is disabled and `diagnostics()` says why.
 
 ### Display hardware (`pq`)
 
@@ -109,17 +133,24 @@ On MediaTek devices the vendor's picture quality service
 `/dev/binder`, which any user can open on the Jolla Phone) sets the display
 controller's colour matrix. Owlfish sends `setColorMatrix3x3` with
 `diag(linearGain(gain))`: the service works in linear light, so each encoded
-gain goes through the sRGB decoding curve. On the Jolla Phone 2048 is 1.0;
-the framework's own unit elsewhere is 1024, so the base is not the same on
-every build. That is why `pq` is only chosen automatically on devices where
-the base was checked.
+gain goes through the sRGB decoding curve. The service's fixed point
+follows the display controller's colour correction (CCORR) block, whose
+coefficient width the kernel reads from the device tree (`ccorr-bit`): 12
+bits means 1024 = 1.0, otherwise 2048 (MediaTek's kernel and the V7
+service, as disassembled, both use this rule). With a wrong base even the
+reset is wrong, so `pq` is only chosen automatically where the base is
+known.
 
-- **Selection** (`renderer` key `auto`): the `ID` in `/etc/hw-release` is
-  on the verified list (`jp2601`), `libgbinder.so.1` loads (with `dlopen`,
+- **Selection** (`renderer` key `auto`): the device tree's `ccorr0` alias
+  leads to a MediaTek CCORR node with the Jolla Phone's layout (13 bits,
+  `ccorr-num-per-pipe` 1, `ccorr-linear` 1; world-readable files under
+  `/sys/firmware/devicetree/base`, read once), or the `ID` in
+  `/etc/hw-release` is on the verified list (`jp2601`, kept as an
+  override); then `libgbinder.so.1` loads (with `dlopen`,
   so there is no package dependency), the service is there, and it answers
-  `getInterfaceVersion` with 7 or more. Otherwise `blend`, and on other
+  `getInterfaceVersion` with 7 or more. Otherwise the GPU, and on other
   devices nothing is loaded or called. `pq` skips only the device list;
-  `blend` skips everything.
+  `blend` and `fetch` skip everything.
 - **Fades:** one call per animation step, skipped when the fixed-point
   matrix is the same as the last one. The item keeps the gain but is
   hidden.
@@ -137,9 +168,10 @@ the base was checked.
 - **Diagnostics:** the journal line `Renderer <name> - <reason>` at every
   change, and `renderer <name>` in the per-settings-change line.
   `diagnostics()` returns the version and status, the renderer and why, the
-  key, the device ID and the service version with the call count and times
-  (or why it is not available).
-- **Screenshots** don't show the hardware's tint; with `blend` they do.
+  key, the device ID, the device tree's colour correction block, and the
+  service version with the call count and times (or why it is not
+  available).
+- **Screenshots** don't show the hardware's tint; with the GPU they do.
 
 The research behind this (the service's calls, the phone tests) is outside
 the repository.
@@ -233,7 +265,7 @@ the same factor (logged at startup, and published as
 ```sh
 dconf write /apps/owlfish/enabled true           # default false
 dconf write /apps/owlfish/temperature 3400       # kelvin, 1900-6500, default 4500
-dconf write /apps/owlfish/saturation 40          # percent, 0 (grey)-100, default 100; display hardware only
+dconf write /apps/owlfish/saturation 40          # percent, 0 (grey)-100, default 100; display hardware or fetch
 dconf write /apps/owlfish/dim 50                 # percent, 0-75, default 0
 dconf write /apps/owlfish/dim_when "'fixed'"     # always (default), fixed or night_light
 dconf write /apps/owlfish/dim_from 1320          # with fixed: minutes after midnight, default 1260
@@ -248,7 +280,7 @@ dconf write /apps/owlfish/schedule_transition 30 # minutes, 0-120, default 60
 dconf write /apps/owlfish/location_manual true   # sun at the coordinates below, default false
 dconf write /apps/owlfish/latitude 60.17         # degrees, north positive
 dconf write /apps/owlfish/longitude 24.94        # degrees, east positive
-dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend (GPU) or pq; not on the settings page
+dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend, fetch (GPU) or pq; not on the settings page
 dconf read /apps/owlfish/sun_state               # written by the plugin, e.g. 'normal'
 dconf reset -f /apps/owlfish/                    # back to defaults
 ```
@@ -279,16 +311,19 @@ In host builds the settings come from `OWLFISH_<KEY>` environment variables
 
 The tests render real frames and check pixel values: uniform dim,
 per-channel gain, black staying black, blend state restored for content drawn
-after the filter. They also cover the colour gains against redshift's table,
+after the filter, and `fetch` (pixels with the saturation through gamma 2.0,
+close to linear light; blend for the gain alone; it needs the EXT
+extension in the host's OpenGL, which Mesa's llvmpipe has, otherwise those
+tests are skipped after checking the blend fallback). They also cover the colour gains against redshift's table,
 tint and dimming combined, the schedule (window, transitions, only the
 colour), sunset and sunrise against USNO reference values, the time zone
 lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
 guard, the D-Bus status, `update-env` against sample environment files,
 the display hardware with a fake PQ service (fixed point, device list,
 selection, fades, resets, handover, failure, crash guard; without
-libgbinder on the host, `pq` falls back to `blend`), the saturation
-(matrix, with the schedule, through the fake PQ service, ignored with
-`blend`), the dimming's `dim_when` (always, fixed, with Night light's times
+libgbinder on the host, `pq` falls back to the GPU), the saturation
+(matrix, with the schedule, through the fake PQ service and fetch, ignored
+with `blend`), the dimming's `dim_when` (always, fixed, with Night light's times
 but not its gradual change),
 and loading through `QGenericPluginFactory`, including a sun schedule
 at fake polar coordinates (`OWLFISH_LOCATION_MANUAL=1 OWLFISH_LATITUDE=89.9`).

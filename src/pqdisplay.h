@@ -12,9 +12,11 @@
 // vendor's picture quality service (vendor.mediatek.hardware.pq_aidl) on
 // /dev/binder. libgbinder is loaded at run time, so devices without it (or
 // without the service) simply don't have this. The service applies the
-// matrix in linear light; 2048 is 1.0 on the Jolla Phone, other builds may
-// use another base. It keeps the matrix until it is changed or the device
-// restarts: whoever sets one must set the identity again.
+// matrix in linear light. Its fixed point follows the display controller's
+// colour correction (CCORR) block: 2048 = 1.0 with 13-bit coefficients (the
+// Jolla Phone), 1024 with 12-bit ones. It keeps the matrix until it is
+// changed or the device restarts: whoever sets one must set the identity
+// again.
 class PqDisplay
 {
 public:
@@ -33,8 +35,19 @@ public:
         virtual bool setRgbGain(const int values[3], QString *error) = 0;
     };
 
+    // The CCORR block as the device tree describes it; 0 or -1 where a
+    // property is missing
+    struct Ccorr
+    {
+        bool found = false;
+        int bits = 0;
+        int engines = 0;
+        int linear = -1;
+    };
+
     static const int MinimumVersion = 7;
     static const char *const HwReleasePath;
+    static const char *const DeviceTreePath;
 
     // Takes ownership of backend; nullptr is the libgbinder one
     explicit PqDisplay(Backend *backend = nullptr);
@@ -44,6 +57,14 @@ public:
     static QString deviceId(const QString &hwReleasePath = QLatin1String(HwReleasePath));
     // Devices where the service's scale (2048 = 1.0) has been checked
     static bool isVerified(const QString &deviceId);
+    // Found through the device tree's "ccorr0" alias, on a MediaTek node.
+    // A few small file reads, no other side effect.
+    static Ccorr ccorr(const QString &deviceTreePath = QLatin1String(DeviceTreePath));
+    // The layout checked on the Jolla Phone, where 2048 = 1.0: 13 bits, one
+    // engine, linear
+    static bool isKnown(const Ccorr &ccorr);
+    // "13 bits, 1 engine, linear", or "none"
+    static QString describe(const Ccorr &ccorr);
 
     // Connects and checks the interface version; false with error() if
     // that fails. Only tries once.

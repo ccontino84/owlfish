@@ -48,7 +48,8 @@ public:
 
     // For tests: the display hardware's service and the file the device is
     // identified by. Before the window is found; takes ownership.
-    void setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath);
+    void setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath,
+                            const QString &deviceTreePath = QLatin1String(PqDisplay::DeviceTreePath));
 
     bool isActive() const { return m_active; }
     // For the settings page: "active", "starting" (still looking for the
@@ -56,8 +57,9 @@ public:
     QString status() const;
     // Lets the plugin try again at the next compositor start
     void resetCrashGuard();
-    // "pq" when the display hardware applies the filter, "blend" when the
-    // item draws it, "none" before the window is found
+    // "pq" when the display hardware applies the filter, "fetch" or "blend"
+    // when the item draws it (the GPU path chosen; fetch draws only while
+    // the saturation is below 100 %), "none" before the window is found
     QString renderer() const;
     // For support, several lines: version, status, the renderer and why it
     // was chosen
@@ -83,9 +85,14 @@ private slots:
     void animate(const QVariant &progress);
     void scheduleTick();
     void displayStatusChanged(const QString &status);
+    // The item found out whether Fetch works
+    void rendererChanged();
     void stopPq();
 
 private:
+    // The display hardware, or the GPU with Fetch working, can apply the
+    // saturation
+    bool matrixSupported() const;
     void attach(QQuickWindow *window);
     void updateLightSensor();
     // The light level sensorfw already has, for the cut-off
@@ -136,6 +143,10 @@ private:
     QMatrix3x3 m_toMatrix;
     QScopedPointer<PqDisplay> m_pq;
     QString m_hwReleasePath;
+    QString m_deviceTreePath;
+    // Read once, at the first renderer choice
+    bool m_ccorrRead;
+    PqDisplay::Ccorr m_ccorr;
     // The display hardware applies the filter instead of the item
     bool m_pqActive;
     // A call failed in this run
@@ -144,6 +155,7 @@ private:
     // The reason says which device this is, so diagnostics() leaves that
     // line out
     bool m_reasonNamesDevice;
+    bool m_capabilitiesLogged;
     // The time zone's city, looked up again when the zone changes
     TimeZoneLocation m_zoneLocation;
     // Today's sun times, for the date, zone and location they were

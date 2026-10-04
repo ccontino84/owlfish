@@ -60,9 +60,12 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     , m_displayOn(true)
     , m_pq(new PqDisplay)
     , m_hwReleasePath(QLatin1String(PqDisplay::HwReleasePath))
+    , m_deviceTreePath(QLatin1String(PqDisplay::DeviceTreePath))
+    , m_ccorrRead(false)
     , m_pqActive(false)
     , m_pqFailed(false)
     , m_reasonNamesDevice(false)
+    , m_capabilitiesLogged(false)
     , m_sunLocated(false)
     , m_sunLatitude(0)
     , m_sunLongitude(0)
@@ -112,10 +115,13 @@ OwlfishController::~OwlfishController()
     stopPq();
 }
 
-void OwlfishController::setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath)
+void OwlfishController::setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath,
+                                           const QString &deviceTreePath)
 {
     m_pq.reset(new PqDisplay(backend));
     m_hwReleasePath = hwReleasePath;
+    m_deviceTreePath = deviceTreePath;
+    m_ccorrRead = false;
 }
 
 QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, qreal dimPercent)
@@ -158,7 +164,9 @@ QString OwlfishController::renderer() const
 {
     if (!m_item)
         return QStringLiteral("none");
-    return m_pqActive ? QStringLiteral("pq") : QStringLiteral("blend");
+    if (m_pqActive)
+        return QStringLiteral("pq");
+    return ColorFilter::rendererName(m_item->renderer());
 }
 
 QString OwlfishController::diagnostics() const
@@ -178,6 +186,8 @@ QString OwlfishController::diagnostics() const
                  .arg(device.isEmpty() ? QStringLiteral("unknown") : device,
                       PqDisplay::isVerified(device) ? QStringLiteral("verified") : QStringLiteral("not verified"));
     }
+    if (m_ccorrRead)
+        lines << QStringLiteral("display colour correction %1").arg(PqDisplay::describe(m_ccorr));
     if (m_pq->isOpen()) {
         lines << QStringLiteral("display hardware version %1, %2 calls, mean %3 ms, max %4 ms")
                  .arg(m_pq->interfaceVersion()).arg(m_pq->calls())
@@ -190,8 +200,8 @@ QString OwlfishController::diagnostics() const
     }
     if (m_settings) {
         QString saturation = QStringLiteral("saturation %1 %").arg(m_settings->saturation());
-        // Only the display hardware mixes the channels
-        if (m_settings->saturation() < 100 && !m_pqActive)
+        // Only the display hardware and Fetch mix the channels
+        if (m_settings->saturation() < 100 && !matrixSupported())
             saturation += QStringLiteral(", not supported by this renderer");
         lines << saturation;
         const QString when = m_settings->dimWhen();
@@ -201,7 +211,24 @@ QString OwlfishController::diagnostics() const
                          QTime(0, 0).addSecs(m_settings->dimTo() * 60).toString(QStringLiteral("HH:mm")))
                   : QStringLiteral("dimming when %1").arg(when));
     }
+    // Only checked once the GPU draws
+    if (m_item && m_item->capabilities().detected) {
+        const ColorFilter::Capabilities capabilities = m_item->capabilities();
+        lines << QStringLiteral("GL %1, %2, %3")
+                 .arg(QString::fromLatin1(capabilities.vendor), QString::fromLatin1(capabilities.renderer),
+                      QString::fromLatin1(capabilities.version))
+              << QStringLiteral("fetch %1, %2")
+                 .arg(ColorFilter::fetchExtensionName(capabilities.fetch),
+                      capabilities.fetchWorks ? QStringLiteral("works") : QStringLiteral("not usable"));
+    }
     return lines.join(QLatin1Char('\n'));
+}
+
+bool OwlfishController::matrixSupported() const
+{
+    if (m_pqActive)
+        return true;
+    return m_item && m_item->renderer() == ColorFilter::Fetch && m_item->capabilities().fetchWorks;
 }
 
 void OwlfishController::findWindow()
@@ -232,6 +259,7 @@ void OwlfishController::attach(QQuickWindow *window)
     m_item = new ColorFilterItem(window->contentItem());
     m_item->setObjectName(QStringLiteral("owlfish-filter"));
     m_item->setZ(FilterZ);
+    connect(m_item.data(), &ColorFilterItem::rendererChanged, this, &OwlfishController::rendererChanged);
 
     connect(window, &QWindow::widthChanged, this, &OwlfishController::updateItemGeometry);
     connect(window, &QWindow::heightChanged, this, &OwlfishController::updateItemGeometry);
@@ -472,9 +500,13 @@ void OwlfishController::updateGain(int fadeMs)
 void OwlfishController::updateRenderer()
 {
     const QString key = m_settings->renderer();
+    // The GPU is fetch wherever it works, blend otherwise. blend and fetch
+    // skip the display hardware.
+    const bool forcedFetch = key == QLatin1String("fetch");
     const bool forcedBlend = key == QLatin1String("blend");
+    const bool forcedGpu = forcedBlend || forcedFetch;
     const bool forcedPq = key == QLatin1String("pq");
-    if (!forcedBlend && !forcedPq && key != QLatin1String("auto"))
+    if (!forcedGpu && !forcedPq && key != QLatin1String("auto"))
         qCWarning(lcOwlfish) << "Unknown renderer" << key << "- using auto";
 
     bool pq = false;
@@ -482,12 +514,20 @@ void OwlfishController::updateRenderer()
     bool namesDevice = false;
     if (m_pqFailed) {
         reason = m_rendererReason;
-    } else if (forcedBlend) {
+    } else if (forcedGpu) {
         reason = QStringLiteral("forced by the renderer key");
     } else {
-        // Nothing is loaded or called on other devices
+        // The device tree says whether the display controller's colour
+        // correction is the kind whose scale is known. Nothing is loaded or
+        // called on other devices.
+        if (!m_ccorrRead) {
+            m_ccorr = PqDisplay::ccorr(m_deviceTreePath);
+            m_ccorrRead = true;
+        }
         const QString device = PqDisplay::deviceId(m_hwReleasePath);
-        if (!forcedPq && !PqDisplay::isVerified(device)) {
+        const bool verified = PqDisplay::isVerified(device);
+        const bool detected = PqDisplay::isKnown(m_ccorr);
+        if (!forcedPq && !verified && !detected) {
             reason = device.isEmpty() ? QStringLiteral("device unknown")
                                       : QStringLiteral("device %1 not verified").arg(device);
             namesDevice = true;
@@ -495,10 +535,25 @@ void OwlfishController::updateRenderer()
             reason = QStringLiteral("display hardware not available: %1").arg(m_pq->error());
         } else {
             pq = true;
-            namesDevice = !forcedPq;
-            reason = forcedPq ? QStringLiteral("forced by the renderer key")
-                              : QStringLiteral("device %1 verified").arg(device);
+            namesDevice = !forcedPq && verified;
+            if (forcedPq)
+                reason = QStringLiteral("forced by the renderer key");
+            else if (verified)
+                reason = QStringLiteral("device %1 verified").arg(device);
+            else
+                reason = QStringLiteral("display hardware detected");
         }
+    }
+
+    // Until the item has checked it (at its first frame), Fetch counts as
+    // working
+    const ColorFilter::Capabilities capabilities = m_item->capabilities();
+    const bool fetchFails = capabilities.detected && !capabilities.fetchWorks;
+    m_item->setRenderer(!forcedBlend && !fetchFails ? ColorFilter::Fetch : ColorFilter::Blend);
+    if (!pq && !forcedBlend && fetchFails) {
+        const QString noFetch = QStringLiteral("fetch not supported (extension %1)")
+                .arg(ColorFilter::fetchExtensionName(capabilities.fetch));
+        reason = forcedFetch ? noFetch : reason + QStringLiteral(", ") + noFetch;
     }
 
     if (pq && !m_pqActive) {
@@ -549,6 +604,20 @@ void OwlfishController::pqFailed()
     if (m_item)
         m_item->setVisible(true);
     qCWarning(lcOwlfish) << "Renderer" << qPrintable(renderer()) << "-" << qPrintable(m_rendererReason);
+}
+
+void OwlfishController::rendererChanged()
+{
+    if (!m_item || m_capabilitiesLogged || !m_item->capabilities().detected)
+        return;
+    m_capabilitiesLogged = true;
+    const ColorFilter::Capabilities capabilities = m_item->capabilities();
+    qCInfo(lcOwlfish) << "OpenGL" << capabilities.vendor << capabilities.renderer << capabilities.version
+                        << "fetch" << ColorFilter::fetchExtensionName(capabilities.fetch)
+                        << (capabilities.fetchWorks ? "works" : "not usable");
+    // Now it is known whether the saturation can be drawn
+    updateRenderer();
+    updateGain(SettingsFadeMs);
 }
 
 void OwlfishController::updateLightSensor()
@@ -652,5 +721,7 @@ void OwlfishController::animate(const QVariant &progress)
     const float t = progress.toFloat();
     m_item->setGain(m_fromGain + (m_toGain - m_fromGain) * t);
     m_matrix = m_fromMatrix + (m_toMatrix - m_fromMatrix) * t;
+    // Drawn by Fetch or the display hardware
+    m_item->setMatrix(m_matrix);
     pushPq();
 }

@@ -53,6 +53,93 @@ const QPoint Grey(125, 75);
 const QPoint Orange(175, 75);
 const QPoint Above(25, 25);
 
+// A fake device tree with a MediaTek CCORR node; a negative value leaves the
+// property out
+void writeCcorr(const QString &root, int bits, int engines, int linear,
+                const QByteArray &compatible = QByteArray("mediatek,disp_ccorr0\0mediatek,mt6858-disp-ccorr\0", 48))
+{
+    const QString node = root + QStringLiteral("/soc/disp-ccorr0@1400c000");
+    QDir().mkpath(node);
+    QDir().mkpath(root + QStringLiteral("/aliases"));
+    const auto write = [](const QString &path, const QByteArray &data) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size())
+            qWarning() << "Cannot write" << path;
+    };
+    const auto cell = [](int value) {
+        const char bytes[4] = { char(value >> 24), char(value >> 16), char(value >> 8), char(value) };
+        return QByteArray(bytes, 4);
+    };
+    write(root + QStringLiteral("/aliases/ccorr0"), QByteArray("/soc/disp-ccorr0@1400c000", 25) + '\0');
+    write(node + QStringLiteral("/compatible"), compatible);
+    if (bits >= 0)
+        write(node + QStringLiteral("/ccorr-bit"), cell(bits));
+    if (engines >= 0)
+        write(node + QStringLiteral("/ccorr-num-per-pipe"), cell(engines));
+    if (linear >= 0)
+        write(node + QStringLiteral("/ccorr-linear"), cell(linear));
+}
+
+// The sRGB curves, for the exact result in linear light
+double srgbDecode(double c)
+{
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+
+double srgbEncode(double l)
+{
+    return l <= 0.0031308 ? l * 12.92 : 1.055 * std::pow(l, 1 / 2.4) - 0.055;
+}
+
+// The GPU renderer auto picks, once the item has checked fetch: fetch where
+// the host's OpenGL has it, blend otherwise
+QString gpuRenderer(const ColorFilterItem *item)
+{
+    return item->capabilities().fetchWorks ? QStringLiteral("fetch") : QStringLiteral("blend");
+}
+
+// What fetch makes of an 8-bit colour with a matrix: the matrix on the
+// squared values, then the square root, and a gain
+QColor throughGamma2(const QColor &color, const QMatrix3x3 &matrix, const QVector3D &gain = QVector3D(1, 1, 1))
+{
+    const double in[3] = { color.redF() * color.redF(), color.greenF() * color.greenF(),
+                           color.blueF() * color.blueF() };
+    int out[3];
+    for (int row = 0; row < 3; ++row) {
+        double l = 0;
+        for (int column = 0; column < 3; ++column)
+            l += matrix(row, column) * in[column];
+        out[row] = qRound(255 * std::sqrt(qBound(0.0, l, 1.0)) * gain[row]);
+    }
+    return QColor(out[0], out[1], out[2]);
+}
+
+float maxDifference(const QMatrix3x3 &a, const QMatrix3x3 &b)
+{
+    float difference = 0;
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column)
+            difference = qMax(difference, qAbs(a(row, column) - b(row, column)));
+    }
+    return difference;
+}
+
+// The exact result in linear light, which fetch approximates (and the
+// display hardware applies)
+QColor throughMatrix(const QColor &color, const QMatrix3x3 &matrix, const QVector3D &gain = QVector3D(1, 1, 1))
+{
+    const double in[3] = { srgbDecode(color.redF()), srgbDecode(color.greenF()), srgbDecode(color.blueF()) };
+    int out[3];
+    for (int row = 0; row < 3; ++row) {
+        double l = 0;
+        for (int column = 0; column < 3; ++column)
+            l += matrix(row, column) * in[column];
+        out[row] = qRound(255 * srgbEncode(qBound(0.0, l, 1.0)) * gain[row]);
+    }
+    return QColor(out[0], out[1], out[2]);
+}
+
+
 // What a FakePq was asked to do; outlives the controller that owns the fake
 struct PqLog
 {
@@ -217,6 +304,8 @@ private slots:
     void uniformDim();
     void nightGainKeepsBlack();
     void blendStateRestored();
+    void fetchRenderer();
+    void fetchRestoresBlending();
     void gainIsClamped();
     void filterGain();
     void temperatureGain_data();
@@ -243,6 +332,7 @@ private slots:
     void linearGain();
     void pqFixedPoint();
     void pqDeviceId();
+    void pqCcorr();
     void pqOpen();
     void pqWithoutLibgbinder();
     void rendererSelection_data();
@@ -253,6 +343,7 @@ private slots:
     void saturationMatrix();
     void saturationThroughPq();
     void saturationWithBlend();
+    void saturationThroughFetch();
     void dimmingWhen_data();
     void dimmingWhen();
     void rendererFallback();
@@ -287,8 +378,10 @@ private:
     void compare(const QImage &image, const QPoint &pos, const QColor &expected);
     // A controller for a QQuickView with the display hardware faked; a null
     // hwRelease means no hw-release file
+    // ccorr: "bits,engines,linear" for a fake device tree, empty for none
     OwlfishController *createPqController(const QTemporaryDir &dir, PqDisplay::Backend *backend,
-                                          const QByteArray &hwRelease = "ID=jp2601\n");
+                                          const QByteArray &hwRelease = "ID=jp2601\n",
+                                          const QByteArray &ccorr = QByteArray());
 
     QTemporaryDir m_cacheDir;
 };
@@ -334,8 +427,15 @@ void tst_Owlfish::compare(const QImage &image, const QPoint &pos, const QColor &
 
 OwlfishController *tst_Owlfish::createPqController(const QTemporaryDir &dir,
                                                    PqDisplay::Backend *backend,
-                                                   const QByteArray &hwRelease)
+                                                   const QByteArray &hwRelease,
+                                                   const QByteArray &ccorr)
 {
+    // Never the host's own device tree
+    const QString deviceTreePath = dir.filePath(QStringLiteral("devicetree"));
+    if (!ccorr.isEmpty()) {
+        const QList<QByteArray> values = ccorr.split(',');
+        writeCcorr(deviceTreePath, values.value(0).toInt(), values.value(1).toInt(), values.value(2).toInt());
+    }
     const QString hwReleasePath = dir.filePath(QStringLiteral("hw-release"));
     if (!hwRelease.isNull()) {
         QFile file(hwReleasePath);
@@ -344,7 +444,7 @@ OwlfishController *tst_Owlfish::createPqController(const QTemporaryDir &dir,
     }
     OwlfishController *controller = new OwlfishController(
             "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts")));
-    controller->setDisplayHardware(backend, hwReleasePath);
+    controller->setDisplayHardware(backend, hwReleasePath, deviceTreePath);
     return controller;
 }
 
@@ -415,6 +515,103 @@ void tst_Owlfish::blendStateRestored()
 
     // 50% red over the filtered white (128): source-over gives (191, 64, 64);
     // a leaked multiply blend would give (64, 0, 0)
+    const QImage image = grab(view.data());
+    compare(image, Above, QColor(191, 64, 64));
+    compare(image, White, QColor(128, 128, 128));
+}
+
+void tst_Owlfish::fetchRenderer()
+{
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    ColorFilterItem *filter = new ColorFilterItem(view->rootObject());
+    filter->setSize(QSizeF(200, 100));
+    filter->setZ(10);
+
+    // Not checked unless asked for
+    grab(view.data());
+    QVERIFY(!filter->capabilities().detected);
+
+    filter->setRenderer(ColorFilter::Fetch);
+    filter->setGain(QVector3D(0.5f, 0.5f, 0.5f));
+    QImage image = grab(view.data());
+    QVERIFY(filter->capabilities().detected);
+    if (!filter->capabilities().fetchWorks)
+        QSKIP("No framebuffer fetch in this OpenGL implementation");
+
+    // Gain only: drawn by blend, which is cheaper
+    QCOMPARE(int(filter->activeRenderer()), int(ColorFilter::Blend));
+    compare(image, White, QColor(128, 128, 128));
+    compare(image, Black, QColor(0, 0, 0));
+    compare(image, Grey, QColor(64, 64, 64));
+    compare(image, Orange, QColor(128, 64, 32));
+
+    // Nothing to do: nothing drawn
+    filter->setGain(QVector3D(1, 1, 1));
+    image = grab(view.data());
+    QCOMPARE(int(filter->activeRenderer()), int(ColorFilter::None));
+    compare(image, Orange, QColor(255, 128, 64));
+
+    // Grayscale in approximately linear light, then the gain; greys stay
+    // grey, colours within a few levels of the exact result
+    const QMatrix3x3 gray = ColorMatrix::saturation(0);
+    const QVector3D gain(1.0f, 0.8f, 0.6f);
+    filter->setMatrix(gray);
+    image = grab(view.data());
+    QCOMPARE(int(filter->activeRenderer()), int(ColorFilter::Fetch));
+    compare(image, White, QColor(255, 255, 255));
+    compare(image, Black, QColor(0, 0, 0));
+    compare(image, Grey, QColor(128, 128, 128));
+    compare(image, Orange, throughGamma2(QColor(255, 128, 64), gray));
+    QVERIFY(qAbs(image.pixelColor(Orange).red() - throughMatrix(QColor(255, 128, 64), gray).red()) <= 6);
+    filter->setGain(gain);
+    image = grab(view.data());
+    compare(image, Orange, throughGamma2(QColor(255, 128, 64), gray, gain));
+    compare(image, White, QColor(255, 204, 153));
+
+    // Vibrant clips at the edges of the gamut
+    const QMatrix3x3 vibrant = ColorMatrix::saturation(1.2);
+    filter->setGain(QVector3D(1, 1, 1));
+    filter->setMatrix(vibrant);
+    image = grab(view.data());
+    compare(image, Grey, QColor(128, 128, 128));
+    compare(image, Orange, throughGamma2(QColor(255, 128, 64), vibrant));
+
+    // Back to no matrix: blend again
+    filter->setMatrix(QMatrix3x3());
+    filter->setGain(QVector3D(0.5f, 0.5f, 0.5f));
+    image = grab(view.data());
+    QCOMPARE(int(filter->activeRenderer()), int(ColorFilter::Blend));
+    compare(image, Orange, QColor(128, 64, 32));
+
+    // Blend ignores the matrix
+    filter->setMatrix(vibrant);
+    filter->setRenderer(ColorFilter::Blend);
+    filter->setGain(QVector3D(0.5f, 0.5f, 0.5f));
+    image = grab(view.data());
+    QCOMPARE(int(filter->activeRenderer()), int(ColorFilter::Blend));
+    compare(image, Orange, QColor(128, 64, 32));
+}
+
+void tst_Owlfish::fetchRestoresBlending()
+{
+    // Content drawn after the filter must be blended normally again
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    ColorFilterItem *filter = new ColorFilterItem(view->rootObject());
+    filter->setSize(QSizeF(200, 100));
+    filter->setZ(10);
+    filter->setRenderer(ColorFilter::Fetch);
+    filter->setGain(QVector3D(0.5f, 0.5f, 0.5f));
+    filter->setMatrix(ColorMatrix::saturation(1.2));
+    grab(view.data());
+    if (!filter->capabilities().fetchWorks)
+        QSKIP("No framebuffer fetch in this OpenGL implementation");
+
+    QQuickItem *above = view->rootObject()->findChild<QQuickItem *>(QStringLiteral("above"));
+    QVERIFY(above);
+    above->setVisible(true);
+
     const QImage image = grab(view.data());
     compare(image, Above, QColor(191, 64, 64));
     compare(image, White, QColor(128, 128, 128));
@@ -980,6 +1177,45 @@ void tst_Owlfish::pqFixedPoint()
     QCOMPARE(values[8], 1);
 }
 
+void tst_Owlfish::pqCcorr()
+{
+    QTemporaryDir dir;
+    const QString root = dir.filePath(QStringLiteral("dt"));
+
+    // None: no device tree, or no alias
+    QVERIFY(!PqDisplay::ccorr(root).found);
+    QCOMPARE(PqDisplay::describe(PqDisplay::ccorr(root)), QStringLiteral("none"));
+
+    // The Jolla Phone's
+    writeCcorr(root, 13, 1, 1);
+    PqDisplay::Ccorr ccorr = PqDisplay::ccorr(root);
+    QVERIFY(ccorr.found);
+    QCOMPARE(ccorr.bits, 13);
+    QCOMPARE(ccorr.engines, 1);
+    QCOMPARE(ccorr.linear, 1);
+    QVERIFY(PqDisplay::isKnown(ccorr));
+    QCOMPARE(PqDisplay::describe(ccorr), QStringLiteral("13 bits, 1 engine, linear"));
+
+    // Other layouts are found but not known
+    QTemporaryDir other;
+    writeCcorr(other.filePath(QStringLiteral("a")), 12, 1, 1);
+    QVERIFY(!PqDisplay::isKnown(PqDisplay::ccorr(other.filePath(QStringLiteral("a")))));
+    writeCcorr(other.filePath(QStringLiteral("b")), 13, 2, 1);
+    ccorr = PqDisplay::ccorr(other.filePath(QStringLiteral("b")));
+    QVERIFY(ccorr.found && !PqDisplay::isKnown(ccorr));
+    QCOMPARE(PqDisplay::describe(ccorr), QStringLiteral("13 bits, 2 engines, linear"));
+    writeCcorr(other.filePath(QStringLiteral("c")), 13, 1, 0);
+    QVERIFY(!PqDisplay::isKnown(PqDisplay::ccorr(other.filePath(QStringLiteral("c")))));
+    // Missing properties are unknown, not defaults
+    writeCcorr(other.filePath(QStringLiteral("d")), -1, -1, -1);
+    ccorr = PqDisplay::ccorr(other.filePath(QStringLiteral("d")));
+    QVERIFY(ccorr.found && !PqDisplay::isKnown(ccorr));
+    QCOMPARE(PqDisplay::describe(ccorr), QStringLiteral("unknown bits, unknown engines, linear unknown"));
+    // Only MediaTek's
+    writeCcorr(other.filePath(QStringLiteral("e")), 13, 1, 1, QByteArray("vendor,other-ccorr\0", 19));
+    QVERIFY(!PqDisplay::ccorr(other.filePath(QStringLiteral("e"))).found);
+}
+
 void tst_Owlfish::pqDeviceId()
 {
     QTemporaryDir dir;
@@ -1080,7 +1316,8 @@ void tst_Owlfish::pqWithoutLibgbinder()
     qunsetenv("OWLFISH_RENDERER");
     QScopedPointer<QQuickView> view(createView());
     QVERIFY(view);
-    QTRY_COMPARE(controller->renderer(), QStringLiteral("blend"));
+    QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+    QTRY_COMPARE(controller->renderer(), gpuRenderer(controller->filterItem()));
     QVERIFY(controller->diagnostics().contains(QStringLiteral("display hardware not available: ")));
     QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
     compare(grab(view.data()), White, QColor(128, 128, 128));
@@ -1097,43 +1334,72 @@ void tst_Owlfish::rendererSelection_data()
     QTest::addColumn<int>("connects");
     // The separate device line, when the reason doesn't name the device
     QTest::addColumn<QString>("deviceLine");
+    // A fake device tree's CCORR block, "bits,engines,linear"; empty for none
+    QTest::addColumn<QByteArray>("ccorr");
 
     const QByteArray jollaPhone("NAME=\"Jolla Jolla Phone\"\nID=jp2601\n");
     const QByteArray other("ID=xqbt52\n");
     QTest::newRow("verified") << jollaPhone << QByteArray() << true << 7
-                              << "pq" << "renderer pq (device jp2601 verified)" << 1 << QString();
+                              << "pq" << "renderer pq (device jp2601 verified)" << 1 << QString()
+                              << QByteArray();
     QTest::newRow("newer service") << jollaPhone << QByteArray("auto") << true << 8
                                    << "pq" << "renderer pq (device jp2601 verified)" << 1
-                                   << QString();
+                                   << QString()
+                                   << QByteArray();
     QTest::newRow("old service") << jollaPhone << QByteArray() << true << 6
-                                 << "blend" << "service version 6, needs 7" << 1
-                                 << QStringLiteral("device jp2601, verified");
+                                 << "gpu" << "service version 6, needs 7" << 1
+                                 << QStringLiteral("device jp2601, verified")
+                                 << QByteArray();
     QTest::newRow("no service") << jollaPhone << QByteArray() << false << 7
-                                << "blend" << "display hardware not available: no service" << 1
-                                << QStringLiteral("device jp2601, verified");
+                                << "gpu" << "display hardware not available: no service" << 1
+                                << QStringLiteral("device jp2601, verified")
+                                << QByteArray();
     // Nothing is loaded or called
     QTest::newRow("other device") << other << QByteArray() << true << 7
-                                  << "blend" << "renderer blend (device xqbt52 not verified)" << 0
-                                  << QString();
+                                  << "gpu" << "renderer %gpu (device xqbt52 not verified" << 0
+                                  << QString()
+                                  << QByteArray();
     QTest::newRow("no hw-release") << QByteArray() << QByteArray() << true << 7
-                                   << "blend" << "renderer blend (device unknown)" << 0
-                                   << QString();
+                                   << "gpu" << "renderer %gpu (device unknown" << 0
+                                   << QString()
+                                   << QByteArray();
     QTest::newRow("forced blend") << jollaPhone << QByteArray("blend") << true << 7
                                   << "blend" << "renderer blend (forced by the renderer key)" << 0
-                                  << QStringLiteral("device jp2601, verified");
+                                  << QStringLiteral("device jp2601, verified")
+                                  << QByteArray();
     QTest::newRow("forced pq") << other << QByteArray("PQ") << true << 7
                                << "pq" << "renderer pq (forced by the renderer key)" << 1
-                               << QStringLiteral("device xqbt52, not verified");
+                               << QStringLiteral("device xqbt52, not verified")
+                               << QByteArray();
     // Still only with a service that is new enough
     QTest::newRow("forced pq, old service") << other << QByteArray("pq") << true << 6
-                                            << "blend" << "service version 6" << 1
-                                            << QStringLiteral("device xqbt52, not verified");
+                                            << "gpu" << "service version 6" << 1
+                                            << QStringLiteral("device xqbt52, not verified")
+                                            << QByteArray();
     QTest::newRow("forced pq, no service") << other << QByteArray("pq") << false << 7
-                                           << "blend" << "not available: no service" << 1
-                                           << QStringLiteral("device xqbt52, not verified");
+                                           << "gpu" << "not available: no service" << 1
+                                           << QStringLiteral("device xqbt52, not verified")
+                                           << QByteArray();
     QTest::newRow("unknown key") << jollaPhone << QByteArray("gpu") << true << 7
                                  << "pq" << "renderer pq (device jp2601 verified)" << 1
-                                 << QString();
+                                 << QString()
+                                 << QByteArray();
+    // Another MediaTek device: found through the device tree, whatever its ID
+    const QByteArray future("ID=jp2701\n");
+    QTest::newRow("detected") << future << QByteArray() << true << 7
+                              << "pq" << "renderer pq (display hardware detected)" << 1
+                              << QStringLiteral("device jp2701, not verified") << QByteArray("13,1,1");
+    QTest::newRow("detected, no service") << future << QByteArray() << false << 7
+                                          << "gpu" << "display hardware not available: no service" << 1
+                                          << QStringLiteral("device jp2701, not verified")
+                                          << QByteArray("13,1,1");
+    // A layout whose scale isn't known: nothing is loaded or called
+    QTest::newRow("12-bit") << future << QByteArray() << true << 7
+                            << "gpu" << "renderer %gpu (device jp2701 not verified" << 0
+                            << QString() << QByteArray("12,1,1");
+    QTest::newRow("two engines") << future << QByteArray() << true << 7
+                                 << "gpu" << "renderer %gpu (device jp2701 not verified" << 0
+                                 << QString() << QByteArray("13,2,1");
 }
 
 void tst_Owlfish::rendererSelection()
@@ -1146,6 +1412,7 @@ void tst_Owlfish::rendererSelection()
     QFETCH(QString, reason);
     QFETCH(int, connects);
     QFETCH(QString, deviceLine);
+    QFETCH(QByteArray, ccorr);
 
     qputenv("OWLFISH_ENABLED", "1");
     qputenv("OWLFISH_TEMPERATURE", "6500");
@@ -1154,15 +1421,27 @@ void tst_Owlfish::rendererSelection()
     PqLog log;
     QTemporaryDir dir;
     QScopedPointer<OwlfishController> controller(createPqController(
-            dir, new FakePq(&log, found, version), hwRelease.isEmpty() ? QByteArray() : hwRelease));
+            dir, new FakePq(&log, found, version), hwRelease.isEmpty() ? QByteArray() : hwRelease, ccorr));
     qunsetenv("OWLFISH_RENDERER");
     QCOMPARE(controller->renderer(), QStringLiteral("none"));
 
     QScopedPointer<QQuickView> view(createView());
     QVERIFY(view);
+    // "gpu": fetch, or blend where fetch doesn't work, once checked
+    if (renderer == QLatin1String("gpu")) {
+        QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+        renderer = gpuRenderer(controller->filterItem());
+        reason.replace(QStringLiteral("%gpu"), renderer);
+    }
     QTRY_COMPARE(controller->renderer(), renderer);
     QVERIFY2(controller->diagnostics().contains(reason), qPrintable(controller->diagnostics()));
     QCOMPARE(log.connects, connects);
+    if (key.isEmpty() && !ccorr.isEmpty()) {
+        const QList<QByteArray> values = ccorr.split(',');
+        QVERIFY2(controller->diagnostics().contains(
+                         QStringLiteral("\ndisplay colour correction %1 bits, ").arg(QString::fromLatin1(values.value(0)))),
+                 qPrintable(controller->diagnostics()));
+    }
     const QStringList lines = controller->diagnostics().split(QLatin1Char('\n'));
     QCOMPARE(lines.filter(QStringLiteral("device ")).size(), 1);
     if (!deviceLine.isEmpty())
@@ -1238,8 +1517,32 @@ void tst_Owlfish::saturationThroughPq()
 
 void tst_Owlfish::saturationWithBlend()
 {
-    // Blending can't mix the channels: the gain alone, and the diagnostics
-    // say so
+    // Blending (forced, or where fetch doesn't work) can't mix the
+    // channels: the gain alone, and the diagnostics say so
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_SATURATION", "40");
+    qputenv("OWLFISH_RENDERER", "blend");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(
+            dir, new FakePq(&log), QByteArray("ID=xqbt52\n")));
+    qunsetenv("OWLFISH_SATURATION");
+    qunsetenv("OWLFISH_RENDERER");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QVERIFY(log.matrices.isEmpty());
+    compare(grab(view.data()), Orange, QColor(128, 64, 32));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nsaturation 40 %, not supported by this renderer")));
+}
+
+void tst_Owlfish::saturationThroughFetch()
+{
+    // Another device, auto: the GPU with fetch where it works, with the
+    // matrix on the encoded values
     qputenv("OWLFISH_ENABLED", "1");
     qputenv("OWLFISH_TEMPERATURE", "6500");
     qputenv("OWLFISH_DIM", "50");
@@ -1251,11 +1554,30 @@ void tst_Owlfish::saturationWithBlend()
     qunsetenv("OWLFISH_SATURATION");
     QScopedPointer<QQuickView> view(createView());
     QVERIFY(view);
+    QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+    QCOMPARE(log.connects, 0);
+
+    if (!controller->filterItem()->capabilities().fetchWorks) {
+        // Blend, which can't desaturate, and the diagnostics say why
+        QTRY_COMPARE(controller->renderer(), QStringLiteral("blend"));
+        const QString diagnostics = controller->diagnostics();
+        QVERIFY2(diagnostics.contains(QStringLiteral(
+                         "\nrenderer blend (device xqbt52 not verified, fetch not supported")),
+                 qPrintable(diagnostics));
+        QVERIFY(diagnostics.contains(QStringLiteral("\nsaturation 40 %, not supported by this renderer")));
+        QSKIP("No framebuffer fetch in this OpenGL implementation; the fallback was checked");
+    }
+
+    QCOMPARE(controller->renderer(), QStringLiteral("fetch"));
+    const QMatrix3x3 saturation = ColorMatrix::saturation(0.4);
+    QTRY_VERIFY(maxDifference(controller->filterItem()->matrix(), saturation) < 1e-6f);
     QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
-    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
-    QVERIFY(log.matrices.isEmpty());
-    compare(grab(view.data()), Orange, QColor(128, 64, 32));
-    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nsaturation 40 %, not supported by this renderer")));
+    compare(grab(view.data()), Orange,
+            throughGamma2(QColor(255, 128, 64), saturation, QVector3D(0.5f, 0.5f, 0.5f)));
+    const QString diagnostics = controller->diagnostics();
+    QVERIFY2(diagnostics.contains(QStringLiteral("\nrenderer fetch (device xqbt52 not verified)\n")),
+             qPrintable(diagnostics));
+    QVERIFY(diagnostics.contains(QStringLiteral("\nsaturation 40 %\n")));
 }
 
 void tst_Owlfish::dimmingWhen_data()
@@ -1426,10 +1748,13 @@ void tst_Owlfish::rendererFallback()
     QScopedPointer<QQuickView> view(createView());
     QVERIFY(view);
 
-    QTRY_COMPARE(controller->renderer(), QStringLiteral("blend"));
+    QTRY_VERIFY(controller->filterItem()->capabilities().detected);
+    const QString gpu = gpuRenderer(controller->filterItem());
+    QTRY_COMPARE(controller->renderer(), gpu);
     QVERIFY(controller->filterItem()->isVisible());
-    QVERIFY(controller->diagnostics().contains(
-            QStringLiteral("renderer blend (display hardware failed: fake failure)\n")));
+    QVERIFY2(controller->diagnostics().contains(
+                     QStringLiteral("renderer %1 (display hardware failed: fake failure").arg(gpu)),
+             qPrintable(controller->diagnostics()));
     QVERIFY(controller->diagnostics().contains(QStringLiteral("\ndevice jp2601, verified\n")));
     // The failed step, then the reset of what can still be reset
     QCOMPARE(log.attempts, 6);
@@ -1442,7 +1767,7 @@ void tst_Owlfish::rendererFallback()
 
     // For the rest of the run
     controller->settings()->setRenderer(QStringLiteral("pq"));
-    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QCOMPARE(controller->renderer(), gpu);
     QCOMPARE(log.attempts, 6);
     controller.reset();
     QCOMPARE(log.attempts, 6);

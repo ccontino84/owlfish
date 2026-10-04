@@ -26,7 +26,8 @@ const int SetRgbGain = 62;
 
 const int One = 2048;
 
-// hw-release IDs of the devices where 2048 = 1.0 was checked by eye
+// hw-release IDs of the devices where 2048 = 1.0 was checked by eye; kept
+// as an override of the device-tree check (PqDisplay::ccorr())
 const char *const VerifiedDevices[] = {
     "jp2601", // Jolla Phone (2026)
 };
@@ -228,6 +229,7 @@ bool GbinderBackend::transact(int code, const int *values, int count, bool matri
 }
 
 const char *const PqDisplay::HwReleasePath = "/etc/hw-release";
+const char *const PqDisplay::DeviceTreePath = "/sys/firmware/devicetree/base";
 
 PqDisplay::PqDisplay(Backend *backend)
     : m_backend(backend ? backend : new GbinderBackend)
@@ -243,6 +245,61 @@ PqDisplay::PqDisplay(Backend *backend)
 
 PqDisplay::~PqDisplay()
 {
+}
+
+namespace {
+
+// A device-tree property: one big-endian 32-bit cell; -1 if missing
+int cell(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return -1;
+    const QByteArray data = file.read(4);
+    if (data.size() != 4)
+        return -1;
+    const uchar *bytes = reinterpret_cast<const uchar *>(data.constData());
+    return int((quint32(bytes[0]) << 24) | (quint32(bytes[1]) << 16) | (quint32(bytes[2]) << 8) | bytes[3]);
+}
+
+}
+
+PqDisplay::Ccorr PqDisplay::ccorr(const QString &deviceTreePath)
+{
+    Ccorr result;
+    // The alias holds the node's path, e.g. "/soc/disp-ccorr0@1400c000"
+    QFile alias(deviceTreePath + QStringLiteral("/aliases/ccorr0"));
+    if (!alias.open(QIODevice::ReadOnly))
+        return result;
+    const QByteArray nodePath = alias.read(256).split('\0').value(0);
+    if (!nodePath.startsWith('/') || nodePath.contains(".."))
+        return result;
+    const QString node = deviceTreePath + QString::fromLatin1(nodePath);
+    QFile compatible(node + QStringLiteral("/compatible"));
+    if (!compatible.open(QIODevice::ReadOnly) || !compatible.read(1024).contains("mediatek,"))
+        return result;
+    result.found = true;
+    result.bits = qMax(0, cell(node + QStringLiteral("/ccorr-bit")));
+    result.engines = qMax(0, cell(node + QStringLiteral("/ccorr-num-per-pipe")));
+    result.linear = cell(node + QStringLiteral("/ccorr-linear"));
+    return result;
+}
+
+bool PqDisplay::isKnown(const Ccorr &ccorr)
+{
+    return ccorr.found && ccorr.bits == 13 && ccorr.engines == 1 && ccorr.linear == 1;
+}
+
+QString PqDisplay::describe(const Ccorr &ccorr)
+{
+    if (!ccorr.found)
+        return QStringLiteral("none");
+    return QStringLiteral("%1 bits, %2 engine%3, %4")
+            .arg(ccorr.bits ? QString::number(ccorr.bits) : QStringLiteral("unknown"))
+            .arg(ccorr.engines ? QString::number(ccorr.engines) : QStringLiteral("unknown"))
+            .arg(ccorr.engines == 1 ? QString() : QStringLiteral("s"))
+            .arg(ccorr.linear == 1 ? QStringLiteral("linear")
+                                   : ccorr.linear == 0 ? QStringLiteral("not linear") : QStringLiteral("linear unknown"));
 }
 
 QString PqDisplay::deviceId(const QString &hwReleasePath)

@@ -100,10 +100,11 @@ Page {
     readonly property var dimWhenNames: ["always", "fixed", "night_light"]
 
     // OwlfishController::renderer() of the running plugin: "pq" (display
-    // hardware), "blend" (GPU), "none" before it has a window; empty
+    // hardware), "fetch" or "blend" (GPU), "none" before it has a window; empty
     // without a reply
     property string pluginRenderer: ""
-    // Only the display hardware can change the saturation. Unknown counts as
+    // Only the display hardware and fetch (GPU) can change the saturation.
+    // "blend" means fetch doesn't work or is turned off. Unknown counts as
     // possible, so the setting stays editable while Owlfish isn't running.
     readonly property bool saturationSupported: pluginRenderer !== "blend"
 

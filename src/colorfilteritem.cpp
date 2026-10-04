@@ -3,7 +3,9 @@
 
 #include "colorfilteritem.h"
 #include "colorfiltermaterial.h"
+#include "colormatrix.h"
 
+#include <QMetaObject>
 #include <QSGGeometryNode>
 
 namespace {
@@ -21,6 +23,8 @@ float clampGain(float value)
 ColorFilterItem::ColorFilterItem(QQuickItem *parent)
     : QQuickItem(parent)
     , m_gain(1, 1, 1)
+    , m_renderer(ColorFilter::Blend)
+    , m_active(ColorFilter::None)
 {
     // Purely visual: no mouse, touch or key handling, so input goes to the
     // items below
@@ -38,20 +42,66 @@ void ColorFilterItem::setGain(const QVector3D &gain)
     emit gainChanged();
 }
 
+void ColorFilterItem::setMatrix(const QMatrix3x3 &matrix)
+{
+    if (m_matrix == matrix)
+        return;
+    m_matrix = matrix;
+    update();
+}
+
+void ColorFilterItem::setRenderer(ColorFilter::Renderer renderer)
+{
+    renderer = renderer == ColorFilter::Fetch ? ColorFilter::Fetch : ColorFilter::Blend;
+    if (m_renderer == renderer)
+        return;
+    m_renderer = renderer;
+    update();
+}
+
 bool ColorFilterItem::isIdentity() const
 {
     return m_gain.x() >= IdentityThreshold
             && m_gain.y() >= IdentityThreshold
-            && m_gain.z() >= IdentityThreshold;
+            && m_gain.z() >= IdentityThreshold
+            && ColorMatrix::isIdentity(m_matrix);
 }
 
 QSGNode *ColorFilterItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData *)
 {
     QSGGeometryNode *node = static_cast<QSGGeometryNode *>(oldNode);
 
-    if (isIdentity() || width() <= 0 || height() <= 0) {
+    // Render thread, with the context current and the GUI thread blocked.
+    // Nothing is checked unless Fetch is asked for.
+    const ColorFilter::Renderer previous = m_active;
+    bool detected = false;
+    if (m_renderer == ColorFilter::Fetch && !m_capabilities.detected) {
+        m_capabilities = ColorFilterMaterial::detect();
+        detected = true;
+    }
+
+    // Fetch only while there is a matrix to apply; the gain alone is cheaper
+    // with Blend
+    const bool fetch = m_renderer == ColorFilter::Fetch && m_capabilities.fetchWorks
+            && !ColorMatrix::isIdentity(m_matrix);
+    const bool gainOnly = m_gain.x() >= IdentityThreshold && m_gain.y() >= IdentityThreshold
+            && m_gain.z() >= IdentityThreshold;
+    ColorFilter::Renderer renderer = fetch ? ColorFilter::Fetch : ColorFilter::Blend;
+    if ((gainOnly && !fetch) || width() <= 0 || height() <= 0)
+        renderer = ColorFilter::None;
+    m_active = renderer;
+    if (detected || m_active != previous)
+        QMetaObject::invokeMethod(this, "rendererChanged", Qt::QueuedConnection);
+
+    if (renderer == ColorFilter::None) {
         delete node;
         return nullptr;
+    }
+
+    ColorFilterMaterial *material = node ? static_cast<ColorFilterMaterial *>(node->material()) : nullptr;
+    if (material && material->renderer() != renderer) {
+        delete node;
+        node = nullptr;
     }
 
     if (!node) {
@@ -60,12 +110,14 @@ QSGNode *ColorFilterItem::updatePaintNode(QSGNode *oldNode, UpdatePaintNodeData 
         geometry->setDrawingMode(GL_TRIANGLE_STRIP);
         node->setGeometry(geometry);
         node->setFlag(QSGNode::OwnsGeometry);
-        node->setMaterial(new ColorFilterMaterial);
+        material = new ColorFilterMaterial(renderer, m_capabilities.fetch);
+        node->setMaterial(material);
         node->setFlag(QSGNode::OwnsMaterial);
     }
 
     QSGGeometry::updateRectGeometry(node->geometry(), boundingRect());
-    static_cast<ColorFilterMaterial *>(node->material())->setGain(m_gain);
+    material->setGain(m_gain);
+    material->setMatrix(m_matrix);
     node->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
     return node;

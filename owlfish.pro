@@ -41,5 +41,6 @@ OTHER_FILES += \
     icons/*.svg \
     icons/render.sh \
     README.md \
+    CHANGELOG.md \
     DEVELOPMENT.md \
     LICENSE

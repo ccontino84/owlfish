@@ -44,9 +44,11 @@ class MDConfItem;
 //   latitude, longitude  degrees, north and east positive
 // Not on the settings page, for troubleshooting:
 //   renderer             "auto" (default): the display hardware on verified
-//                        devices, the GPU elsewhere; "blend": always the
-//                        GPU; "pq": the display hardware also on devices
-//                        not verified (MediaTek only)
+//                        devices, the GPU elsewhere (fetch, or blend where
+//                        fetch doesn't work); "blend": always the GPU's
+//                        multiply blend; "fetch": always the GPU with
+//                        framebuffer fetch; "pq": the display hardware
+//                        also on devices not verified (MediaTek only)
 // Written by the plugin, for the settings page:
 //   als_max_lux          the most the light sensor can report, in lux, so the
 //                        settings page offers no threshold it can't reach;

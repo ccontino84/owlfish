@@ -10,6 +10,9 @@ namespace {
 // Rec. 709 / sRGB luminance of linear red, green and blue
 const float Luminance[3] = { 0.2126f, 0.7152f, 0.0722f };
 
+// Coefficients this close to the identity's change no 8-bit value
+const float IdentityTolerance = 0.001f;
+
 }
 
 namespace ColorMatrix {
@@ -50,6 +53,17 @@ QMatrix3x3 withGain(const QMatrix3x3 &matrix, const QVector3D &encodedGain)
             result(row, column) = gain * matrix(row, column);
     }
     return result;
+}
+
+bool isIdentity(const QMatrix3x3 &matrix)
+{
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column) {
+            if (qAbs(matrix(row, column) - (row == column ? 1.0f : 0.0f)) > IdentityTolerance)
+                return false;
+        }
+    }
+    return true;
 }
 
 }
