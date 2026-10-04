@@ -314,7 +314,10 @@ per-channel gain, black staying black, blend state restored for content drawn
 after the filter, and `fetch` (pixels with the saturation through gamma 2.0,
 close to linear light; blend for the gain alone; it needs the EXT
 extension in the host's OpenGL, which Mesa's llvmpipe has, otherwise those
-tests are skipped after checking the blend fallback). They also cover the colour gains against redshift's table,
+tests are skipped after checking the blend fallback; Mesa 25.2's llvmpipe
+reads only zeros through it in desktop GL and fails them, Mesa 26 works,
+so the release workflow tests in an Ubuntu 26.04 container). They also
+cover the colour gains against redshift's table,
 tint and dimming combined, the schedule (window, transitions, only the
 colour), sunset and sunrise against USNO reference values, the time zone
 lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
@@ -367,12 +370,18 @@ devel-su journalctl -f -n 0 --no-pager _COMM=lipstick   # e.g. "Renderer pq - de
 
 ## Making a release
 
-1. Raise `Version:` in `rpm/owlfish.spec` and push.
+1. Raise `Version:` in `rpm/owlfish.spec` (local test builds carry a
+   `~alphaN`, `~betaN` or `~rcN` suffix; the release has none), add the
+   version's entry at the top of `CHANGELOG.md` (`## <version> (date)`, then
+   one bullet per user-visible change), and push.
 2. On GitHub: **Actions > Release > Run workflow**. It checks that
-   `v<Version>` does not exist yet, runs the tests, builds the aarch64 and
-   armv7hl RPMs against the Sailfish OS 5.1.0.11 SDK targets, and creates the
-   release `v<Version>` with both RPMs attached. By default the release is a
-   draft: review it, then publish it on the Releases page.
+   `v<Version>` does not exist yet and that `CHANGELOG.md` has its entry,
+   runs the tests, builds the aarch64 and armv7hl RPMs against the Sailfish
+   OS 5.1.0.11 SDK targets, and creates the release `v<Version>` with both
+   RPMs attached. The release text is the changelog entry
+   (`ci/release-notes.sh <version>`), then GitHub's generated notes. By
+   default the release is a draft: review it, then publish it on the
+   Releases page.
 
 The builds use the community Sailfish SDK images
 ([coderus/sailfishos-platform-sdk](https://hub.docker.com/r/coderus/sailfishos-platform-sdk))
