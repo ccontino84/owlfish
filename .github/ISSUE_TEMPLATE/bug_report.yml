@@ -1,0 +1,31 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      # Real text, not a placeholder, so that Enter continues the list
+      value: "1. "
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: >-
+        Filled in by Settings > Owlfish > Report a bug. Otherwise
+        double-tap the title of the settings page, tap Copy and paste it
+        here.
+      render: text
