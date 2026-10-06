@@ -90,8 +90,8 @@ wrong](#if-something-goes-wrong)).
     and end, without a gradual change.
   - **Only in the dark**: the dimming fades out above the chosen light
     level and comes back below 75 % of it. A meter shows the light level
-    now. The scale ends at the most your phone's light sensor can measure
-    (on the Jolla Phone about 2200 lux).
+    now. The scale starts at 1 lux (a dark room) and ends at the most your
+    phone's light sensor can measure (on the Jolla Phone about 2200 lux).
 
 - **Accessibility**
   - **Correction**: *Red-weak (protan)*, *Green-weak (deutan)*, *Blue-weak

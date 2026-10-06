@@ -29,7 +29,7 @@ class MDConfItem;
 //                        transitions)
 //   dim_from, dim_to     minutes after midnight, defaults 21:00 and 07:00
 //   dim_cutoff           bool, default true: no extra dimming in bright light
-//   dim_cutoff_lux       ambient light level that counts as bright, 100 to
+//   dim_cutoff_lux       ambient light level that counts as bright, 1 to
 //                        50000, default 1000
 //   schedule             bool, default false: warm colour only at night,
 //                        neutral otherwise
@@ -79,8 +79,8 @@ public:
     static const int MaximumDim = 75;
     static const int DefaultTemperature = 4500;
     static const int DefaultCutoffLux = 1000;
-    // Nothing darker counts as bright; brighter is direct sun
-    static const int MinimumCutoffLux = 100;
+    // Brighter is direct sun
+    static const int MinimumCutoffLux = 1;
     static const int MaximumCutoffLux = 50000;
     static const int DefaultFrom = 21 * 60;
     static const int DefaultTo = 7 * 60;

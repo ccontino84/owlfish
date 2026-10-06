@@ -4,6 +4,7 @@
 - New Accessibility section with colour correction: Red-weak (protan), Green-weak (deutan) and Blue-weak (tritan) make colours that are hard to tell apart differ in brightness, with a Strength slider (for red- and green-weak, how strong the weakness is). Greyscale shows everything in shades of grey, all day. The correction works on the same devices as Saturation and applies all the time, also outside Night light's hours.
 - Report a bug from the settings page's pull-down menu: it opens GitHub's bug report form in the browser with your Sailfish OS version and Owlfish's diagnostics filled in.
 - Reset to defaults, also in the pull-down menu: every setting back to its default, including hidden ones.
+- "Only in the dark" can now be set as low as 1 lux (was 100), for dimming only in a really dark room: new steps 1, 10 and 50 lux.
 
 ## 1.3.1 (2026-10-04)
 - Saturation now works on other devices too, not only the Jolla Phone (tested on the Xperia 10 III). The graphics processor desaturates the screen while Saturation is below 100 %; at 100 % nothing changes. Devices whose graphics processor can't do it keep the slider greyed out.

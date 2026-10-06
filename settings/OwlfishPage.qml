@@ -89,10 +89,12 @@ Page {
     readonly property var transitionSteps: [0, 30, 60, 120]
 
     // Light levels span several orders of magnitude; step through them
-    // logarithmically. Indoors is typically 100-500 lux, daylight indoors near
-    // a window 1000-2000, outdoors in shade 10 000-25 000, in sun more.
-    // Same range as OwlfishSettings::MinimumCutoffLux..MaximumCutoffLux.
-    readonly property var allLuxSteps: [100, 150, 200, 300, 500, 700,
+    // logarithmically. A dark room is about 1 lux, a dim one 10-50, indoors
+    // 100-500, daylight indoors near a window 1000-2000, outdoors in shade
+    // 10 000-25 000, in sun more. Same range as
+    // OwlfishSettings::MinimumCutoffLux..MaximumCutoffLux; coarser below 100.
+    readonly property var allLuxSteps: [1, 10, 50,
+                                        100, 150, 200, 300, 500, 700,
                                         1000, 1500, 2000, 3000, 5000, 7000,
                                         10000, 15000, 20000, 30000, 50000]
     // Only the levels the sensor can report: above its maximum a threshold

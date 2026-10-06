@@ -2463,7 +2463,9 @@ void tst_Owlfish::cutoffLuxRange()
         return lux;
     };
     QCOMPARE(cutoffLux("700"), 700);
-    QCOMPARE(cutoffLux("20"), 100);
+    QCOMPARE(cutoffLux("20"), 20);
+    QCOMPARE(cutoffLux("1"), 1);
+    QCOMPARE(cutoffLux("0"), 1);
     QCOMPARE(cutoffLux("1000000"), 50000);
     QCOMPARE(cutoffLux("nan"), 1000);
 }

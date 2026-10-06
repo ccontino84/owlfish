@@ -290,7 +290,7 @@ dconf write /apps/owlfish/dim_when "'fixed'"     # always (default), fixed or ni
 dconf write /apps/owlfish/dim_from 1320          # with fixed: minutes after midnight, default 1260
 dconf write /apps/owlfish/dim_to 390             # default 420
 dconf write /apps/owlfish/dim_cutoff false       # default true
-dconf write /apps/owlfish/dim_cutoff_lux 500     # 100-50000, default 1000
+dconf write /apps/owlfish/dim_cutoff_lux 500     # 1-50000, default 1000
 dconf write /apps/owlfish/schedule true          # warm only at night, default false
 dconf write /apps/owlfish/schedule_sun true      # sunset to sunrise instead of fixed times, default false
 dconf write /apps/owlfish/schedule_from 1320     # minutes after midnight (22:00), default 1260
