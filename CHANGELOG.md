@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.4.0 (unreleased)
+## 1.4.0 (2026-10-06)
 - New Accessibility section with colour correction: Red-weak (protan), Green-weak (deutan) and Blue-weak (tritan) make colours that are hard to tell apart differ in brightness, with a Strength slider (for red- and green-weak, how strong the weakness is). Greyscale shows everything in shades of grey, all day. The correction works on the same devices as Saturation and applies all the time, also outside Night light's hours.
 - Report a bug from the settings page's pull-down menu: it opens GitHub's bug report form in the browser with your Sailfish OS version and Owlfish's diagnostics filled in.
 - Reset to defaults, also in the pull-down menu: every setting back to its default, including hidden ones.
