@@ -8,6 +8,8 @@ warmer and can make it darker than its lowest brightness, like Android's
   (1900 K), all the time, between fixed times, or from sunset to sunrise,
   with a gradual change at the start and end. Less saturation, down to
   grey, for bedtime.
+- **Colour correction** for red-, green- or blue-weak vision, or greyscale,
+  all day.
 - **Dimming** on top of the current brightness, by up to 75 %, all the time,
   between fixed times or with Night light, optionally only in the dark: the
   light sensor turns it off in bright light, for example outdoors, and back
@@ -86,6 +88,16 @@ is greyed out, with the reason.
     level and comes back below 75 % of it. A meter shows the light level
     now. The scale ends at the most your phone's light sensor can measure
     (on the Jolla Phone about 2200 lux).
+
+- **Accessibility**
+  - **Correction**: *Red-weak (protan)*, *Green-weak (deutan)*, *Blue-weak
+    (tritan)* or *Greyscale*. The colour-vision corrections turn the
+    difference between colours that are hard to tell apart into a
+    difference of brightness. **Strength**: for red- and green-weak, how
+    strong the weakness is (default 50 %); 100 % is for someone who can't
+    see that colour at all. Greyscale removes all colour. The correction
+    applies all the time, before Night light's saturation and warmth; for
+    the correction alone, set Warmth to 6500 K. Same devices as Saturation.
 
 The light sensor only affects the dimming: with a schedule, the dimming
 applies when both the time and the light say so.

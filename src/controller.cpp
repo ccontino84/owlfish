@@ -5,6 +5,7 @@
 #include "alscalibration.h"
 #include "ambientcutoff.h"
 #include "colormatrix.h"
+#include "correction.h"
 #include "settings.h"
 #include "colortemperature.h"
 #include "logging.h"
@@ -199,6 +200,15 @@ QString OwlfishController::diagnostics() const
                  .arg(m_pq->error().isEmpty() ? QStringLiteral("not checked") : m_pq->error());
     }
     if (m_settings) {
+        const QString correction = m_settings->correction();
+        QString line = QStringLiteral("correction %1").arg(correction);
+        if (correction != QLatin1String("none")) {
+            if (Correction::hasStrength(correction))
+                line += QStringLiteral(" %1 %").arg(m_settings->correctionStrength());
+            if (!matrixSupported())
+                line += QStringLiteral(", not supported by this renderer");
+        }
+        lines << line;
         QString saturation = QStringLiteral("saturation %1 %").arg(m_settings->saturation());
         // Only the display hardware and Fetch mix the channels
         if (m_settings->saturation() < 100 && !matrixSupported())
@@ -229,6 +239,16 @@ bool OwlfishController::matrixSupported() const
     if (m_pqActive)
         return true;
     return m_item && m_item->renderer() == ColorFilter::Fetch && m_item->capabilities().fetchWorks;
+}
+
+QMatrix3x3 OwlfishController::colourMatrix(qreal colourStrength) const
+{
+    if (!matrixSupported())
+        return QMatrix3x3();
+    // Desaturated after the correction, so a grey bedtime keeps the
+    // correction's lightness cues; tinted last (filterGain())
+    return ColorMatrix::saturation(saturationFactor(colourStrength, m_settings->saturation()))
+            * Correction::matrix(m_settings->correction(), m_settings->correctionStrength() / 100.0);
 }
 
 void OwlfishController::findWindow()
@@ -306,7 +326,8 @@ void OwlfishController::applySettings()
                         << "sun" << m_settings->scheduleSun() << "manual location" << m_settings->locationManual()
                         << "saturation" << m_settings->saturation() << "%"
                         << "dim when" << qPrintable(m_settings->dimWhen()) << m_settings->dimFrom() << m_settings->dimTo()
-                        << "renderer" << qPrintable(renderer());
+                        << "renderer" << qPrintable(renderer())
+                        << "correction" << qPrintable(m_settings->correction()) << m_settings->correctionStrength() << "%";
 
     m_cutoff->setThreshold(m_settings->cutoffLux());
     updateLightSensor();
@@ -492,9 +513,8 @@ void OwlfishController::updateGain(int fadeMs)
     const qreal colour = currentColourStrength(now);
     const bool dimSuspended = m_settings->cutoffEnabled() && m_cutoff->isBright();
     const qreal dim = dimSuspended ? 0 : m_settings->dim() * currentDimStrength(now);
-    // Desaturated first, then tinted: a warm grey at bedtime
-    fadeTo(filterGain(colour, m_settings->temperature(), dim),
-           ColorMatrix::saturation(saturationFactor(colour, m_settings->saturation())), fadeMs);
+    // Corrected and desaturated first, then tinted: a warm grey at bedtime
+    fadeTo(filterGain(colour, m_settings->temperature(), dim), colourMatrix(colour), fadeMs);
 }
 
 void OwlfishController::updateRenderer()
@@ -615,7 +635,7 @@ void OwlfishController::rendererChanged()
     qCInfo(lcOwlfish) << "OpenGL" << capabilities.vendor << capabilities.renderer << capabilities.version
                         << "fetch" << ColorFilter::fetchExtensionName(capabilities.fetch)
                         << (capabilities.fetchWorks ? "works" : "not usable");
-    // Now it is known whether the saturation can be drawn
+    // Now it is known whether the correction and the saturation can be drawn
     updateRenderer();
     updateGain(SettingsFadeMs);
 }

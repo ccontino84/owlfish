@@ -91,8 +91,11 @@ private slots:
 
 private:
     // The display hardware, or the GPU with Fetch working, can apply the
-    // saturation
+    // correction and the saturation
     bool matrixSupported() const;
+    // The correction, then Night light's saturation, where they can be
+    // applied; the identity otherwise
+    QMatrix3x3 colourMatrix(qreal colourStrength) const;
     void attach(QQuickWindow *window);
     void updateLightSensor();
     // The light level sensorfw already has, for the cut-off
@@ -136,8 +139,8 @@ private:
     QVariantAnimation m_animation;
     QVector3D m_fromGain;
     QVector3D m_toGain;
-    // The saturation, faded like the gain; applied by the display hardware
-    // only, before the gain
+    // The correction and the saturation, faded like the gain; applied by the
+    // display hardware or Fetch, before the gain
     QMatrix3x3 m_matrix;
     QMatrix3x3 m_fromMatrix;
     QMatrix3x3 m_toMatrix;

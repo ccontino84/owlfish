@@ -6,6 +6,7 @@
 #include "colorfilteritem.h"
 #include "colormatrix.h"
 #include "colortemperature.h"
+#include "correction.h"
 #include "controller.h"
 #include "crashguard.h"
 #include <owlfish_version.h>
@@ -122,6 +123,20 @@ float maxDifference(const QMatrix3x3 &a, const QMatrix3x3 &b)
             difference = qMax(difference, qAbs(a(row, column) - b(row, column)));
     }
     return difference;
+}
+
+float determinant(const QMatrix3x3 &m)
+{
+    return m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1))
+         - m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0))
+         + m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0));
+}
+
+QVector3D apply(const QMatrix3x3 &m, const QVector3D &v)
+{
+    return QVector3D(m(0, 0) * v.x() + m(0, 1) * v.y() + m(0, 2) * v.z(),
+                     m(1, 0) * v.x() + m(1, 1) * v.y() + m(1, 2) * v.z(),
+                     m(2, 0) * v.x() + m(2, 1) * v.y() + m(2, 2) * v.z());
 }
 
 // The exact result in linear light, which fetch approximates (and the
@@ -344,6 +359,11 @@ private slots:
     void saturationThroughPq();
     void saturationWithBlend();
     void saturationThroughFetch();
+    void correctionMatrices();
+    void correctionThroughPq();
+    void correctionWithBlend();
+    void correctionThroughFetch();
+    void saturationAfterCorrection();
     void dimmingWhen_data();
     void dimmingWhen();
     void rendererFallback();
@@ -1578,6 +1598,245 @@ void tst_Owlfish::saturationThroughFetch()
     QVERIFY2(diagnostics.contains(QStringLiteral("\nrenderer fetch (device xqbt52 not verified)\n")),
              qPrintable(diagnostics));
     QVERIFY(diagnostics.contains(QStringLiteral("\nsaturation 40 %\n")));
+}
+
+void tst_Owlfish::correctionMatrices()
+{
+    for (const QString &name : { QStringLiteral("protan"), QStringLiteral("deutan"),
+                                 QStringLiteral("tritan"), QStringLiteral("greyscale") })
+        QCOMPARE(Correction::normalize(name.toUpper() + QLatin1Char(' ')), name);
+    QCOMPARE(Correction::normalize(QStringLiteral("cinema")), QStringLiteral("none"));
+    QCOMPARE(Correction::normalize(QString()), QStringLiteral("none"));
+    // Pre-release names, now the plain ones or dropped
+    QCOMPARE(Correction::normalize(QStringLiteral("protan3")), QStringLiteral("none"));
+    QCOMPARE(Correction::normalize(QStringLiteral("grayscale")), QStringLiteral("none"));
+    QVERIFY(Correction::hasStrength(QStringLiteral("deutan")));
+    QVERIFY(!Correction::hasStrength(QStringLiteral("greyscale")));
+    QVERIFY(!Correction::hasStrength(QStringLiteral("none")));
+    QVERIFY(ColorMatrix::isIdentity(Correction::simulation(QStringLiteral("none"))));
+    QVERIFY(ColorMatrix::isIdentity(Correction::matrix(QStringLiteral("none"), 1)));
+    QVERIFY(ColorMatrix::isIdentity(Correction::matrix(QStringLiteral("protan"), 0)));
+
+    // Greyscale is full grey, whatever the strength
+    QVERIFY(ColorMatrix::isIdentity(Correction::simulation(QStringLiteral("greyscale"))));
+    QCOMPARE(Correction::matrix(QStringLiteral("greyscale"), 0), ColorMatrix::saturation(0));
+    QCOMPARE(Correction::matrix(QStringLiteral("greyscale"), 0.7), ColorMatrix::saturation(0));
+
+    // The simulation is Viénot, Brettel & Mollon 1999's (Color Res. Appl.
+    // 24:243): their projection (Eq. 5) in their LMS (Eq. 4), so
+    // lms · simulation = projection · lms
+    const float rgbToLms[9] = { 17.8824f, 43.5161f, 4.11935f,
+                                3.45565f, 27.1554f, 3.86714f,
+                                0.0299566f, 0.184309f, 1.46709f };
+    const float protanopia[9] = { 0, 2.02344f, -2.52581f, 0, 1, 0, 0, 0, 1 };
+    const float deuteranopia[9] = { 1, 0, 0, 0.494207f, 0, 1.24827f, 0, 0, 1 };
+    const QMatrix3x3 lms(rgbToLms);
+    QVERIFY(maxDifference(lms * Correction::simulation(QStringLiteral("protan")),
+                          QMatrix3x3(protanopia) * lms) < 0.01f);
+    QVERIFY(maxDifference(lms * Correction::simulation(QStringLiteral("deutan")),
+                          QMatrix3x3(deuteranopia) * lms) < 0.01f);
+
+    // Tritan isn't in the paper: the same construction through red. Tritans
+    // keep their L and M responses, so lms · simulation keeps those rows.
+    const QMatrix3x3 tritanLms = lms * Correction::simulation(QStringLiteral("tritan"));
+    for (int column = 0; column < 3; ++column) {
+        QVERIFY(qAbs(tritanLms(0, column) - lms(0, column)) < 0.01f);
+        QVERIFY(qAbs(tritanLms(1, column) - lms(1, column)) < 0.01f);
+    }
+
+    // As computed independently (numpy, research/colour-correction, where
+    // these are the "3" set)
+    const float protan30[9] = { 1.1194f, -0.1194f, 0, 0.1769f, 0.8231f, 0, -0.0247f, 0.0247f, 1 };
+    const float protan70[9] = { 1.2174f, -0.2174f, 0, 0.3221f, 0.6779f, 0, -0.0449f, 0.0449f, 1 };
+    const float deutan70[9] = { 0.7324f, 0.2676f, 0, -0.3966f, 1.3966f, 0, 0.0553f, -0.0553f, 1 };
+    const float tritan70[9] = { 1, -0.2073f, 0.2073f, 0, 0.6928f, 0.3072f, 0, 0.0428f, 0.9572f };
+    QVERIFY(maxDifference(Correction::matrix(QStringLiteral("protan"), 0.3), QMatrix3x3(protan30)) < 0.001f);
+    QVERIFY(maxDifference(Correction::matrix(QStringLiteral("protan"), 0.7), QMatrix3x3(protan70)) < 0.001f);
+    QVERIFY(maxDifference(Correction::matrix(QStringLiteral("deutan"), 0.7), QMatrix3x3(deutan70)) < 0.001f);
+    QVERIFY(maxDifference(Correction::matrix(QStringLiteral("tritan"), 0.7), QMatrix3x3(tritan70)) < 0.001f);
+
+    // Between the severity table's steps, in proportion: the correction is
+    // linear in the spread
+    const QMatrix3x3 between = (Correction::matrix(QStringLiteral("deutan"), 0.3)
+                                + Correction::matrix(QStringLiteral("deutan"), 0.4)) * 0.5f;
+    QVERIFY(maxDifference(Correction::matrix(QStringLiteral("deutan"), 0.35), between) < 1e-5f);
+    // Above 100 % is 100 %
+    QCOMPARE(Correction::matrix(QStringLiteral("deutan"), 2), Correction::matrix(QStringLiteral("deutan"), 1));
+
+    struct Case {
+        QString name;
+        // Colours a dichromat sees as everyone does, besides white
+        QVector3D kept[2];
+        // One they don't
+        QVector3D test;
+        float minimumDeterminant;
+    };
+    const QVector3D red(1, 0, 0);
+    const QVector3D blue(0, 0, 1);
+    const Case cases[] = {
+        { QStringLiteral("protan"), { blue, QVector3D(1, 1, 0) }, red, 0.8f },
+        { QStringLiteral("deutan"), { blue, QVector3D(1, 1, 0) }, red, 0.8f },
+        // Half the classic spread: stops at a determinant of 0.5
+        { QStringLiteral("tritan"), { red, QVector3D(0, 1, 1) }, blue, 0.49f },
+    };
+    for (const Case &c : cases) {
+        const QMatrix3x3 simulation = Correction::simulation(c.name);
+        const QVector3D confused = apply(simulation, c.test);
+        float previous = 0;
+        for (qreal strength : { 0.1, 0.35, 0.7, 1.0 }) {
+            const QMatrix3x3 correction = Correction::matrix(c.name, strength);
+            for (const QVector3D &colour : { QVector3D(1, 1, 1), c.kept[0], c.kept[1] })
+                QVERIFY2((apply(correction, colour) - colour).length() < 1e-4f, qPrintable(c.name));
+            // The dichromat sees a growing difference
+            const float seen = (apply(simulation, apply(correction, c.test))
+                                - apply(simulation, apply(correction, confused))).length();
+            QVERIFY2(seen > previous, qPrintable(c.name));
+            previous = seen;
+            // Never folds
+            QVERIFY2(determinant(correction) > c.minimumDeterminant, qPrintable(c.name));
+        }
+    }
+}
+
+void tst_Owlfish::correctionThroughPq()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_CORRECTION", "protan");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    qunsetenv("OWLFISH_CORRECTION");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+
+    // Corrected, then dimmed; 50 % by default
+    const QVector3D gain(0.5f, 0.5f, 0.5f);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            Correction::matrix(QStringLiteral("protan"), 0.5), gain)));
+    QVERIFY(controller->diagnostics().split(QLatin1Char('\n')).contains(QStringLiteral("correction protan 50 %")));
+
+    // A change fades, like the gain
+    const int matrices = log.matrices.size();
+    controller->settings()->setCorrection(QStringLiteral("deutan"), 30);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            Correction::matrix(QStringLiteral("deutan"), 0.3), gain)));
+    QVERIFY(log.matrices.size() > matrices + 2);
+
+    // 0 % changes nothing; above 100 % is 100 %
+    controller->settings()->setCorrection(QStringLiteral("protan"), 0);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixFor(gain));
+    QVERIFY(controller->diagnostics().split(QLatin1Char('\n')).contains(QStringLiteral("correction protan 0 %")));
+    controller->settings()->setCorrection(QStringLiteral("protan"), 150);
+    QCOMPARE(controller->settings()->correctionStrength(), 100);
+
+    // Greyscale, without a strength
+    controller->settings()->setCorrection(QStringLiteral("greyscale"), 30);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(ColorMatrix::saturation(0), gain)));
+    QVERIFY(controller->diagnostics().split(QLatin1Char('\n')).contains(QStringLiteral("correction greyscale")));
+
+    // None: the gain alone
+    controller->settings()->setCorrection(QStringLiteral("none"));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixFor(gain));
+    QVERIFY(controller->diagnostics().split(QLatin1Char('\n')).contains(QStringLiteral("correction none")));
+
+    // Off: identity
+    controller->settings()->setCorrection(QStringLiteral("protan"));
+    controller->settings()->setEnabled(false);
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+}
+
+void tst_Owlfish::correctionWithBlend()
+{
+    // Blending (forced, or where fetch doesn't work) can't mix the
+    // channels: the gain alone, and the diagnostics say so
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_CORRECTION", "deutan");
+    qputenv("OWLFISH_RENDERER", "blend");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(
+            dir, new FakePq(&log), QByteArray("ID=xqbt52\n")));
+    qunsetenv("OWLFISH_CORRECTION");
+    qunsetenv("OWLFISH_RENDERER");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QVERIFY(ColorMatrix::isIdentity(controller->filterItem()->matrix()));
+    QVERIFY(log.matrices.isEmpty());
+    compare(grab(view.data()), Orange, QColor(128, 64, 32));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ncorrection deutan 50 %, not supported by this renderer")));
+    controller->settings()->setCorrection(QStringLiteral("greyscale"));
+    QTRY_VERIFY(controller->diagnostics().contains(QStringLiteral("\ncorrection greyscale, not supported by this renderer")));
+}
+
+void tst_Owlfish::correctionThroughFetch()
+{
+    // Another device, auto: the correction alone is reason enough to draw
+    // with fetch
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_CORRECTION", "greyscale");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(
+            dir, new FakePq(&log), QByteArray("ID=xqbt52\n")));
+    qunsetenv("OWLFISH_CORRECTION");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+    if (!controller->filterItem()->capabilities().fetchWorks)
+        QSKIP("No framebuffer fetch in this OpenGL implementation");
+
+    QCOMPARE(controller->renderer(), QStringLiteral("fetch"));
+    const QMatrix3x3 grey = ColorMatrix::saturation(0);
+    QTRY_VERIFY(maxDifference(controller->filterItem()->matrix(), grey) < 1e-6f);
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    compare(grab(view.data()), Orange,
+            throughGamma2(QColor(255, 128, 64), grey, QVector3D(0.5f, 0.5f, 0.5f)));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ncorrection greyscale\n")));
+}
+
+void tst_Owlfish::saturationAfterCorrection()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_SATURATION", "40");
+    qputenv("OWLFISH_CORRECTION", "protan");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    qunsetenv("OWLFISH_SATURATION");
+    qunsetenv("OWLFISH_CORRECTION");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+
+    // Corrected, then desaturated, then dimmed
+    const QVector3D gain(0.5f, 0.5f, 0.5f);
+    const QMatrix3x3 correction = Correction::matrix(QStringLiteral("protan"), 0.5);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            ColorMatrix::saturation(0.4) * correction, gain)));
+
+    // At 0 % grey, but with the correction's lightness: red and green get
+    // other greys than without it
+    controller->settings()->setSaturation(0);
+    const QMatrix3x3 grey = ColorMatrix::saturation(0);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(grey * correction, gain)));
+    QVERIFY(maxDifference(grey * correction, grey) > 0.01f);
+
+    // Greyscale and the saturation share the grey: together they stay grey
+    controller->settings()->setSaturation(40);
+    controller->settings()->setCorrection(QStringLiteral("greyscale"));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(grey, gain)));
+    QVERIFY(maxDifference(ColorMatrix::saturation(0.4) * grey, grey) < 1e-6f);
 }
 
 void tst_Owlfish::dimmingWhen_data()

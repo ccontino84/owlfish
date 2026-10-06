@@ -43,6 +43,10 @@ Page {
         property int dim_to: 420
         property bool dim_cutoff: true
         property int dim_cutoff_lux: 1000
+        // "none", "protan", "deutan", "tritan" or "greyscale" (Correction in
+        // the plugin)
+        property string correction: "none"
+        property int correction_strength: 50
         // Written by the plugin from mce's AlsValueMultiplier, so that the
         // light reading below is in the same units as the threshold
         property real als_multiplier: 1.0
@@ -103,10 +107,16 @@ Page {
     // hardware), "fetch" or "blend" (GPU), "none" before it has a window; empty
     // without a reply
     property string pluginRenderer: ""
-    // Only the display hardware and fetch (GPU) can change the saturation.
-    // "blend" means fetch doesn't work or is turned off. Unknown counts as
-    // possible, so the setting stays editable while Owlfish isn't running.
-    readonly property bool saturationSupported: pluginRenderer !== "blend"
+    // Only the display hardware and fetch (GPU) can change the saturation
+    // and correct colours. "blend" means fetch doesn't work or is turned
+    // off. Unknown counts as possible, so the settings stay editable while
+    // Owlfish isn't running.
+    readonly property bool matrixSupported: pluginRenderer !== "blend"
+    // Same order as the correction menu
+    readonly property var correctionNames: ["none", "protan", "deutan", "tritan", "greyscale"]
+    // Anything else, such as a pre-release's name, is none, as in the plugin
+    readonly property string correction: correctionNames.indexOf(config.correction) >= 0
+                                         ? config.correction : "none"
 
     // Minutes after midnight now, for the schedule status line
     property int nowMinutes: currentMinutes()
@@ -529,7 +539,7 @@ Page {
             }
 
             Slider {
-                enabled: page.saturationSupported
+                enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 width: parent.width
                 label: "Saturation"
@@ -553,7 +563,7 @@ Page {
             }
 
             Label {
-                visible: !page.saturationSupported
+                visible: !page.matrixSupported
                 x: Theme.horizontalPageMargin
                 width: parent.width - 2 * Theme.horizontalPageMargin
                 wrapMode: Text.Wrap
@@ -802,6 +812,74 @@ Page {
                     var threshold = page.luxSteps[Math.round(thresholdSlider.sliderValue)]
                     return "Stops dimming above " + page.formatLux(threshold)
                             + " and dims again below " + page.formatLux(threshold * 0.75) + "."
+                }
+            }
+
+            SectionHeader {
+                text: "Accessibility"
+            }
+
+            ComboBox {
+                enabled: page.matrixSupported
+                opacity: enabled ? 1.0 : Theme.opacityLow
+                label: "Correction"
+                description: {
+                    if (!page.matrixSupported)
+                        return "Not supported on this device."
+                    switch (page.correction) {
+                    case "none":
+                        return ""
+                    case "greyscale":
+                        return "Shows everything in shades of grey."
+                    }
+                    // The Strength slider appears below, often under the
+                    // screen's edge
+                    return "Makes colours you confuse easier to tell apart. Set the strength below."
+                }
+                currentIndex: page.correctionNames.indexOf(page.correction)
+
+                menu: ContextMenu {
+                    // Same order as page.correctionNames
+                    MenuItem {
+                        text: "None"
+                        onClicked: config.correction = "none"
+                    }
+                    MenuItem {
+                        text: "Red-weak (protan)"
+                        onClicked: config.correction = "protan"
+                    }
+                    MenuItem {
+                        text: "Green-weak (deutan)"
+                        onClicked: config.correction = "deutan"
+                    }
+                    MenuItem {
+                        text: "Blue-weak (tritan)"
+                        onClicked: config.correction = "tritan"
+                    }
+                    MenuItem {
+                        text: "Greyscale"
+                        onClicked: config.correction = "greyscale"
+                    }
+                }
+            }
+
+            Slider {
+                // Greyscale is always full
+                visible: page.correction !== "none" && page.correction !== "greyscale"
+                enabled: page.matrixSupported
+                opacity: enabled ? 1.0 : Theme.opacityLow
+                width: parent.width
+                label: "Strength"
+                // 0 changes nothing, but puts 50 % in the middle
+                minimumValue: 0
+                maximumValue: 100
+                stepSize: 5
+                value: config.correction_strength
+                valueText: Math.round(sliderValue) + " %"
+                onSliderValueChanged: {
+                    var strength = Math.round(sliderValue)
+                    if (strength !== config.correction_strength)
+                        config.correction_strength = strength
                 }
             }
         }

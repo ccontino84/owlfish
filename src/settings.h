@@ -21,7 +21,7 @@ class MDConfItem;
 //                        default 4500
 //   saturation           percent, 0 (grey) to 100 (no change), default 100;
 //                        with the colour, so it follows the schedule
-//                        (bedtime); display hardware only
+//                        (bedtime); display hardware or fetch only
 //   dim                  extra dimming in percent, 0 to MaximumDim, default 0
 //   dim_when             when the dimming applies: "always" (default),
 //                        "fixed" (dim_from to dim_to, no transition) or
@@ -42,6 +42,12 @@ class MDConfItem;
 //   location_manual      bool, default false: sunset and sunrise at latitude
 //                        and longitude instead of the time zone's city
 //   latitude, longitude  degrees, north and east positive
+//   correction           "none" (default), "protan", "deutan", "tritan" or
+//                        "greyscale" (Correction), all the time, before
+//                        the saturation and the tint; display hardware or
+//                        fetch only
+//   correction_strength  percent, 0 (no change) to 100, default 50; not
+//                        for greyscale
 // Not on the settings page, for troubleshooting:
 //   renderer             "auto" (default): the display hardware on verified
 //                        devices, the GPU elsewhere (fetch, or blend where
@@ -81,6 +87,8 @@ public:
     static const int DefaultTransition = 60;
     static const int MaximumTransition = 120;
     static const int DefaultSaturation = 100;
+    // For protan and deutan the severity (Correction::matrix())
+    static const int DefaultCorrectionStrength = 50;
 
     explicit OwlfishSettings(QObject *parent = nullptr);
 
@@ -102,6 +110,10 @@ public:
     QString renderer() const;
     // Percent
     int saturation() const;
+    // Correction::normalize()d
+    QString correction() const;
+    // Percent
+    int correctionStrength() const;
     // "always", "fixed" or "night_light"; "always" if anything else
     QString dimWhen() const;
     int dimFrom() const;
@@ -118,6 +130,7 @@ public:
     void setEnabled(bool enabled);
     void setRenderer(const QString &renderer);
     void setSaturation(int saturation);
+    void setCorrection(const QString &correction, int strength = DefaultCorrectionStrength);
     void setDimWhen(const QString &when);
 #endif
 
@@ -141,6 +154,8 @@ private:
     MDConfItem *m_longitude;
     MDConfItem *m_renderer;
     MDConfItem *m_saturation;
+    MDConfItem *m_correction;
+    MDConfItem *m_correctionStrength;
     MDConfItem *m_dimWhen;
     MDConfItem *m_dimFrom;
     MDConfItem *m_dimTo;
@@ -161,6 +176,8 @@ private:
     double m_longitude;
     QString m_renderer;
     int m_saturation;
+    QString m_correction;
+    int m_correctionStrength;
     QString m_dimWhen;
     int m_dimFrom;
     int m_dimTo;

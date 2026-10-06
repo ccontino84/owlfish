@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.4.0 (unreleased)
+- New Accessibility section with colour correction: Red-weak (protan), Green-weak (deutan) and Blue-weak (tritan) make colours that are hard to tell apart differ in brightness, with a Strength slider (for red- and green-weak, how strong the weakness is). Greyscale shows everything in shades of grey, all day. The correction works on the same devices as Saturation and applies all the time, also outside Night light's hours.
+
 ## 1.3.1 (2026-10-04)
 - Saturation now works on other devices too, not only the Jolla Phone (tested on the Xperia 10 III). The graphics processor desaturates the screen while Saturation is below 100 %; at 100 % nothing changes. Devices whose graphics processor can't do it keep the slider greyed out.
 - The display hardware is recognised by what it is, not by the phone's model name, so future devices with the same hardware as the Jolla Phone use it too.

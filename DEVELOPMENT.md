@@ -53,7 +53,7 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   is removed.
 - **Renderer:** on verified devices the display hardware applies the gain
   instead (`pq`), at no GPU cost; everywhere else the item draws it
-  (`fetch` while the saturation is below 100 %, `blend` otherwise). See
+  (`fetch` while there is a matrix to apply, `blend` otherwise). See
   below.
 - **Scope:** the plugin only activates inside the `lipstick` executable, even
   if the environment variable leaks into child processes. It is built with
@@ -68,9 +68,10 @@ Source layout (`src/`):
 |---|---|
 | `plugin.cpp` | `QGenericPlugin` entry, process/window options |
 | `controller.*` | finds the window, combines settings, schedule and light sensor into a gain, fades |
-| `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and its material: multiply blend, or framebuffer fetch with the saturation |
+| `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and its material: multiply blend, or framebuffer fetch with the matrix |
 | `pqdisplay.*` | the display hardware's colour matrix through MediaTek's PQ service |
 | `colormatrix.*` | the saturation matrix, and the gain in linear light for the display hardware |
+| `correction.*` | the colour correction matrices (protan, deutan, tritan, greyscale) |
 | `colortemperature.*` | kelvin → per-channel gain |
 | `schedule.*` | the daily window and its transitions |
 | `sun.*` | sunset and sunrise (NOAA's solar equations) |
@@ -104,11 +105,26 @@ a bedtime screen is a warm grey:
 `blend` (forced, or where fetch doesn't work) the saturation is ignored,
 the settings page greys it out, and `diagnostics()` says so.
 
+The correction (`Correction::matrix`) comes before the saturation and
+applies all the time (not with the schedule):
+`diag(linearGain(tint × dim)) · saturation · correction`. Desaturating after
+it keeps the correction's lightness cues in a grey bedtime. For protan,
+deutan and tritan it is a 3×3 matrix in linear sRGB, built in Viénot et
+al. 1999's LMS (scaled so white is 1, 1, 1): the error of the missing cone
+against the dichromat simulation goes into L and M equally, which turns it
+into a difference of brightness and keeps the red-green difference mild
+observers still see. For protan and deutan the strength is the severity
+(Machado et al. 2009's loss); full strength gives a protanope, a
+deuteranope and a tritanope the same lightness difference. Greyscale is
+`saturation(0)`, so with the saturation it stays grey. The research and
+the test images are outside the repository.
+
 ### GPU (`fetch` and `blend`)
 
 Where the display hardware isn't used, the item draws the filter:
 
-- **`fetch`** while the saturation is below 100 %: the shader reads the
+- **`fetch`** while there is a matrix (the saturation below 100 %, or a
+  correction): the shader reads the
   pixel with `GL_ARM_shader_framebuffer_fetch` (`gl_LastFragColorARM`,
   Mali) or `GL_EXT_shader_framebuffer_fetch` (`gl_LastFragData[0]`),
   replaces blending, keeps the destination alpha (`glColorMask`), applies
@@ -124,7 +140,8 @@ Where the display hardware isn't used, the item draws the filter:
 - Whether the extension exists and the shader links is checked at the
   GPU's first frame (never while the display hardware is used). Until
   then `renderer()` says `fetch`; if it doesn't work, `blend` draws
-  everything, the saturation is disabled and `diagnostics()` says why.
+  everything, the saturation and the correction are disabled and
+  `diagnostics()` says why.
 
 ### Display hardware (`pq`)
 
@@ -266,6 +283,8 @@ the same factor (logged at startup, and published as
 dconf write /apps/owlfish/enabled true           # default false
 dconf write /apps/owlfish/temperature 3400       # kelvin, 1900-6500, default 4500
 dconf write /apps/owlfish/saturation 40          # percent, 0 (grey)-100, default 100; display hardware or fetch
+dconf write /apps/owlfish/correction "'deutan'"  # none (default), protan, deutan, tritan or greyscale; display hardware or fetch
+dconf write /apps/owlfish/correction_strength 50 # percent, 0-100, default 50; not for greyscale
 dconf write /apps/owlfish/dim 50                 # percent, 0-75, default 0
 dconf write /apps/owlfish/dim_when "'fixed'"     # always (default), fixed or night_light
 dconf write /apps/owlfish/dim_from 1320          # with fixed: minutes after midnight, default 1260

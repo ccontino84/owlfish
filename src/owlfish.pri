@@ -15,6 +15,7 @@ HEADERS += \
     $$PWD/colorfiltermaterial.h \
     $$PWD/colormatrix.h \
     $$PWD/colortemperature.h \
+    $$PWD/correction.h \
     $$PWD/controller.h \
     $$PWD/crashguard.h \
     $$PWD/logging.h \
@@ -32,6 +33,7 @@ SOURCES += \
     $$PWD/colorfiltermaterial.cpp \
     $$PWD/colormatrix.cpp \
     $$PWD/colortemperature.cpp \
+    $$PWD/correction.cpp \
     $$PWD/controller.cpp \
     $$PWD/crashguard.cpp \
     $$PWD/logging.cpp \

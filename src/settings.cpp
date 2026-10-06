@@ -3,6 +3,7 @@
 
 #include "settings.h"
 #include "colortemperature.h"
+#include "correction.h"
 
 #ifdef HAVE_MLITE
 #include <MDConfItem>
@@ -72,6 +73,13 @@ int clampSaturation(double value)
     return qBound(0, int(std::lround(value)), 100);
 }
 
+int clampCorrectionStrength(double value)
+{
+    if (!std::isfinite(value))
+        return OwlfishSettings::DefaultCorrectionStrength;
+    return qBound(0, int(std::lround(value)), 100);
+}
+
 QString normalizeDimWhen(const QString &value)
 {
     const QString when = value.trimmed().toLower();
@@ -117,6 +125,8 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_longitude(item("longitude", this))
     , m_renderer(item("renderer", this))
     , m_saturation(item("saturation", this))
+    , m_correction(item("correction", this))
+    , m_correctionStrength(item("correction_strength", this))
     , m_dimWhen(item("dim_when", this))
     , m_dimFrom(item("dim_from", this))
     , m_dimTo(item("dim_to", this))
@@ -125,7 +135,8 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     for (MDConfItem *item : { m_enabled, m_temperature, m_dim, m_cutoffEnabled, m_cutoffLux,
                               m_scheduled, m_scheduleSun, m_scheduleFrom, m_scheduleTo,
                               m_scheduleTransition, m_locationManual, m_latitude, m_longitude,
-                              m_renderer, m_saturation, m_dimWhen, m_dimFrom, m_dimTo })
+                              m_renderer, m_saturation, m_dimWhen, m_dimFrom, m_dimTo,
+                              m_correction, m_correctionStrength })
         connect(item, &MDConfItem::valueChanged, this, &OwlfishSettings::changed);
 }
 
@@ -204,6 +215,16 @@ int OwlfishSettings::saturation() const
     return clampSaturation(m_saturation->value(DefaultSaturation).toDouble());
 }
 
+QString OwlfishSettings::correction() const
+{
+    return Correction::normalize(m_correction->value().toString());
+}
+
+int OwlfishSettings::correctionStrength() const
+{
+    return clampCorrectionStrength(m_correctionStrength->value(DefaultCorrectionStrength).toDouble());
+}
+
 QString OwlfishSettings::dimWhen() const
 {
     return normalizeDimWhen(m_dimWhen->value().toString());
@@ -268,6 +289,8 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_longitude(checkDegrees(env("longitude", std::numeric_limits<double>::quiet_NaN()), 180))
     , m_renderer(normalizeRenderer(QString::fromLocal8Bit(qgetenv("OWLFISH_RENDERER"))))
     , m_saturation(clampSaturation(env("saturation", DefaultSaturation)))
+    , m_correction(Correction::normalize(QString::fromLocal8Bit(qgetenv("OWLFISH_CORRECTION"))))
+    , m_correctionStrength(clampCorrectionStrength(env("correction_strength", DefaultCorrectionStrength)))
     , m_dimWhen(normalizeDimWhen(QString::fromLocal8Bit(qgetenv("OWLFISH_DIM_WHEN"))))
     , m_dimFrom(clampMinuteOfDay(env("dim_from", DefaultFrom), DefaultFrom))
     , m_dimTo(clampMinuteOfDay(env("dim_to", DefaultTo), DefaultTo))
@@ -349,6 +372,16 @@ int OwlfishSettings::saturation() const
     return m_saturation;
 }
 
+QString OwlfishSettings::correction() const
+{
+    return m_correction;
+}
+
+int OwlfishSettings::correctionStrength() const
+{
+    return m_correctionStrength;
+}
+
 QString OwlfishSettings::dimWhen() const
 {
     return m_dimWhen;
@@ -392,6 +425,13 @@ void OwlfishSettings::setRenderer(const QString &renderer)
 void OwlfishSettings::setSaturation(int saturation)
 {
     m_saturation = clampSaturation(saturation);
+    emit changed();
+}
+
+void OwlfishSettings::setCorrection(const QString &correction, int strength)
+{
+    m_correction = Correction::normalize(correction);
+    m_correctionStrength = clampCorrectionStrength(strength);
     emit changed();
 }
 
