@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: 2026 ccontino84
 # SPDX-License-Identifier: LGPL-2.1-only
 #
-# Run by hand (Actions > Release > Run workflow) after setting the new Version
-# in rpm/owlfish.spec and adding its entry to CHANGELOG.md: runs the tests,
-# builds the RPMs and creates the GitHub release v<Version> with them
-# attached. The release text is the changelog entry, followed by GitHub's
-# generated notes (contributors, full changelog link).
+# Run by hand (Actions > Release > Run workflow) on the release branch, after
+# setting the new Version in rpm/owlfish.spec and adding its entry to
+# CHANGELOG.md: runs the tests, builds the RPMs and creates the GitHub release
+# v<Version> with them attached, for that commit. main is fast-forwarded to it
+# only once this has worked (DEVELOPMENT.md, "Making a release"). The release
+# text is the changelog entry, followed by GitHub's generated notes
+# (contributors, full changelog link).
 name: Release
 
 on:
@@ -30,6 +32,9 @@ jobs:
       version: ${{ steps.spec.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # All of the history, to compare the commit with main
+          fetch-depth: 0
       - id: spec
         run: |
           version=$(sed -n 's/^Version:[[:space:]]*//p' rpm/owlfish.spec)
@@ -40,6 +45,11 @@ jobs:
           fi
           if ! ci/release-notes.sh "$version" > /dev/null; then
             echo "::error::CHANGELOG.md has no entry for $version"
+            exit 1
+          fi
+          # main must be able to fast-forward to the released commit
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            echo "::error::main has commits that $GITHUB_REF_NAME lacks; merge main into it first"
             exit 1
           fi
 

@@ -389,18 +389,29 @@ devel-su journalctl -f -n 0 --no-pager _COMM=lipstick   # e.g. "Renderer pq - de
 
 ## Making a release
 
-1. Raise `Version:` in `rpm/owlfish.spec` (local test builds carry a
-   `~alphaN`, `~betaN` or `~rcN` suffix; the release has none), add the
-   version's entry at the top of `CHANGELOG.md` (`## <version> (date)`, then
-   one bullet per user-visible change), and push.
-2. On GitHub: **Actions > Release > Run workflow**. It checks that
-   `v<Version>` does not exist yet and that `CHANGELOG.md` has its entry,
-   runs the tests, builds the aarch64 and armv7hl RPMs against the Sailfish
-   OS 5.1.0.11 SDK targets, and creates the release `v<Version>` with both
-   RPMs attached. The release text is the changelog entry
+The release is built from its branch (`dev/<major.minor>`), and `main`
+only moves once that has worked, so a failing build never leaves `main`
+needing a fix.
+
+1. On the release branch: one commit per feature, each with its
+   `CHANGELOG.md` bullet under `## <version> (unreleased)`. Then a release
+   commit: `Version:` in `rpm/owlfish.spec` (local test builds carry a
+   `~alphaN`, `~betaN` or `~rcN` suffix; the release has none), and the
+   entry's heading dated, `## <version> (date)`. Push the branch.
+2. On GitHub: **Actions > Release > Run workflow**, from the release branch.
+   It checks that `v<Version>` does not exist yet, that `CHANGELOG.md` has
+   its entry and that `main` can fast-forward to the commit. It then runs
+   the tests, builds the aarch64 and armv7hl RPMs against the Sailfish OS
+   5.1.0.11 SDK targets, and creates the release `v<Version>` for that
+   commit with both RPMs attached. The release text is the changelog entry
    (`ci/release-notes.sh <version>`), then GitHub's generated notes. By
-   default the release is a draft: review it, then publish it on the
-   Releases page.
+   default the release is a draft.
+3. If it fails: fix it on the branch, delete the draft if one was created,
+   push and run it again. `main` hasn't changed.
+4. If it works: fast-forward `main` to the same commit
+   (`git push origin dev/<major.minor>:main`), try the draft's RPMs on a
+   phone, then publish the draft on the Releases page. Publishing creates
+   the tag `v<Version>` on that commit, which is now on `main`.
 
 The builds use the community Sailfish SDK images
 ([coderus/sailfishos-platform-sdk](https://hub.docker.com/r/coderus/sailfishos-platform-sdk))
