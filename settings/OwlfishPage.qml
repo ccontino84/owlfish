@@ -166,31 +166,59 @@ Page {
         request.send()
     }
 
-    // The plugin's diagnostics; without a reply (not running, or older than
-    // 1.2) what the page knows
-    function openDiagnostics() {
-        function show(text) {
-            pageStack.push(Qt.resolvedUrl("DiagnosticsPage.qml"), { text: text })
-        }
+    // The plugin's diagnostics, or fallbackDiagnostics()
+    function collectDiagnostics(done) {
         plugin.typedCall("diagnostics", [],
-                         function(text) { show(text) },
+                         function(text) { done(text) },
                          function() {
-                             var lines = []
-                             if (page.pluginVersion !== "")
-                                 lines.push("version " + page.pluginVersion)
-                             switch (page.pluginStatus) {
-                             case "unsupported":
-                                 lines.push("status unsupported (00-owlfish.conf missing)")
-                                 break
-                             case "not-running":
-                                 lines.push("status not-running (00-owlfish.conf present)")
-                                 break
-                             default:
-                                 lines.push("status " + (page.pluginStatus || "unknown"))
-                                 lines.push("no diagnostics from this version")
+                             // The plugin's system line, from os-release
+                             var request = new XMLHttpRequest()
+                             request.onreadystatechange = function() {
+                                 if (request.readyState === XMLHttpRequest.DONE)
+                                     done(fallbackDiagnostics(request.responseText || ""))
                              }
-                             show(lines.join("\n"))
+                             request.open("GET", "file:///etc/os-release")
+                             request.send()
                          })
+    }
+
+    // What the page knows when the plugin doesn't reply (not running, or
+    // older than 1.2)
+    function fallbackDiagnostics(osRelease) {
+        var lines = []
+        if (page.pluginVersion !== "")
+            lines.push("version " + page.pluginVersion)
+        var system = /^PRETTY_NAME="?([^"\n]*)/m.exec(osRelease)
+        lines.push("system " + (system && system[1] !== "" ? system[1] : "unknown"))
+        switch (page.pluginStatus) {
+        case "unsupported":
+            lines.push("status unsupported (00-owlfish.conf missing)")
+            break
+        case "not-running":
+            lines.push("status not-running (00-owlfish.conf present)")
+            break
+        default:
+            lines.push("status " + (page.pluginStatus || "unknown"))
+            lines.push("no diagnostics from this version")
+        }
+        return lines.join("\n")
+    }
+
+    function openDiagnostics() {
+        collectDiagnostics(function(text) {
+            pageStack.push(Qt.resolvedUrl("DiagnosticsPage.qml"), { text: text })
+        })
+    }
+
+    // A new GitHub issue in the browser, from the bug report form
+    // (.github/ISSUE_TEMPLATE/bug_report.yml) with the diagnostics filled in;
+    // the user writes the rest and submits it there
+    function reportBug() {
+        collectDiagnostics(function(diagnostics) {
+            Qt.openUrlExternally("https://github.com/ccontino84/owlfish/issues/new"
+                                 + "?template=bug_report.yml"
+                                 + "&diagnostics=" + encodeURIComponent(diagnostics))
+        })
     }
 
     Component.onCompleted: {
@@ -457,6 +485,13 @@ Page {
         contentHeight: column.height + Theme.paddingLarge
 
         VerticalScrollDecorator {}
+
+        PullDownMenu {
+            MenuItem {
+                text: "Report a bug"
+                onClicked: page.reportBug()
+            }
+        }
 
         Column {
             id: column

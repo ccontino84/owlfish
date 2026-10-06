@@ -14,6 +14,7 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
+#include <QFile>
 #include <QGuiApplication>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -42,6 +43,26 @@ const int ScheduleIntervalMs = 30000;
 const int ScheduleStepFadeMs = 1000;
 // Above everything the compositor QML puts in the window
 const qreal FilterZ = 1e9;
+
+// os-release's PRETTY_NAME, e.g. "Sailfish OS 5.2.0.17 (Tampella)", for the
+// diagnostics
+QString systemName()
+{
+    QFile file(QStringLiteral("/etc/os-release"));
+    if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        while (!file.atEnd()) {
+            const QString line = QString::fromUtf8(file.readLine()).trimmed();
+            if (!line.startsWith(QLatin1String("PRETTY_NAME=")))
+                continue;
+            QString name = line.mid(12);
+            if (name.size() >= 2 && name.startsWith(QLatin1Char('"')) && name.endsWith(QLatin1Char('"')))
+                name = name.mid(1, name.size() - 2);
+            if (!name.isEmpty())
+                return name;
+        }
+    }
+    return QStringLiteral("unknown");
+}
 
 }
 
@@ -175,6 +196,7 @@ QString OwlfishController::diagnostics() const
     // Pasted into reports as a whole, so it names the version too
     QStringList lines;
     lines << QStringLiteral("version %1").arg(QStringLiteral(OWLFISH_VERSION))
+          << QStringLiteral("system %1").arg(systemName())
           << QStringLiteral("status %1").arg(status());
     lines << QStringLiteral("renderer %1 (%2)")
              .arg(renderer(), m_item ? m_rendererReason : status());

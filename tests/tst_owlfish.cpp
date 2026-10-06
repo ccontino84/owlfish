@@ -1149,8 +1149,12 @@ void tst_Owlfish::statusOnDBus()
     QCOMPARE(reply.value(), QStringLiteral("none"));
     reply = remote.call(QStringLiteral("diagnostics"));
     QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
-    QVERIFY(reply.value().startsWith(QStringLiteral("version " OWLFISH_VERSION "\nstatus starting\n"
-                                                     "renderer none (starting)\n")));
+    // The system from os-release, which the host has too
+    QVERIFY2(QRegularExpression(QStringLiteral("^version " OWLFISH_VERSION "\nsystem [^\n]+\n"
+                                               "status starting\nrenderer none \\(starting\\)\n"))
+                     .match(reply.value()).hasMatch(),
+             qPrintable(reply.value()));
+    QVERIFY(!reply.value().contains(QStringLiteral("\nsystem unknown\n")));
 
     bus.unregisterService(QLatin1String(OwlfishStatusService::ServiceName));
 }

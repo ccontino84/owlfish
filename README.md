@@ -68,6 +68,9 @@ systemctl --user restart lipstick     # restarts the home screen; closes open ap
 them (the times with *Fixed times*, for example). What the phone can't do
 is greyed out, with the reason.
 
+The pull-down menu has **Report a bug** (see [If something goes
+wrong](#if-something-goes-wrong)).
+
 - **Enabled**: the master switch, also available as the top menu shortcut
   (tap to toggle, long press to open the page).
 - **Night light**
@@ -122,8 +125,11 @@ fixed times give a steadier routine.
 ## If something goes wrong
 
 The settings page shows a warning at the top when Owlfish is not running.
-When you report a problem, double-tap the title of the settings page, tap
-**Copy** and paste the text into the report.
+To report a problem, pull down the settings page and tap **Report a bug**:
+the browser opens GitHub's bug report form with your Sailfish OS version and
+Owlfish's diagnostics filled in; describe the problem and submit it (needs
+a GitHub account). Without an account, double-tap the title of the
+settings page, tap **Copy** and paste the text into your report.
 
 - **"Not supported on this device."** Your device's own configuration
   loads Qt plugins through the same setting as Owlfish
