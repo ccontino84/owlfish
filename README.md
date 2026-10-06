@@ -68,7 +68,8 @@ systemctl --user restart lipstick     # restarts the home screen; closes open ap
 them (the times with *Fixed times*, for example). What the phone can't do
 is greyed out, with the reason.
 
-The pull-down menu has **Report a bug** (see [If something goes
+The pull-down menu has **Reset to defaults** (every setting, including
+hidden ones) and **Report a bug** (see [If something goes
 wrong](#if-something-goes-wrong)).
 
 - **Enabled**: the master switch, also available as the top menu shortcut

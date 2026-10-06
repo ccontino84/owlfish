@@ -6,6 +6,7 @@ import Sailfish.Silica 1.0
 import Nemo.Configuration 1.0
 import Nemo.DBus 2.0
 import QtSensors 5.0
+import "defaults.js" as Defaults
 
 // Options that only matter after a choice on this page are hidden until it
 // is made (the times with "Fixed times", the location with "Sunset to
@@ -14,39 +15,40 @@ import QtSensors 5.0
 Page {
     id: page
 
-    // Keys and defaults must match the lipstick plugin (settings.h)
+    // Keys and defaults must match the lipstick plugin (settings.h); the
+    // defaults are in defaults.js
     ConfigurationGroup {
         id: config
 
         path: "/apps/owlfish"
 
-        property bool enabled: false
-        property int temperature: 4500
+        property bool enabled: Defaults.values.enabled
+        property int temperature: Defaults.values.temperature
         // Percent; 100 is no change, 0 grey
-        property int saturation: 100
-        property bool schedule: false
+        property int saturation: Defaults.values.saturation
+        property bool schedule: Defaults.values.schedule
         // Sunset to sunrise instead of the fixed times
-        property bool schedule_sun: false
+        property bool schedule_sun: Defaults.values.schedule_sun
         // Minutes after midnight
-        property int schedule_from: 1260
-        property int schedule_to: 420
-        property int schedule_transition: 60
+        property int schedule_from: Defaults.values.schedule_from
+        property int schedule_to: Defaults.values.schedule_to
+        property int schedule_transition: Defaults.values.schedule_transition
         // Typed coordinates instead of the time zone's city; out of range
         // until set
-        property bool location_manual: false
-        property real latitude: 1000
-        property real longitude: 1000
-        property int dim: 0
+        property bool location_manual: Defaults.values.location_manual
+        property real latitude: Defaults.values.latitude
+        property real longitude: Defaults.values.longitude
+        property int dim: Defaults.values.dim
         // "always", "fixed" (dim_from to dim_to) or "night_light"
-        property string dim_when: "always"
-        property int dim_from: 1260
-        property int dim_to: 420
-        property bool dim_cutoff: true
-        property int dim_cutoff_lux: 1000
+        property string dim_when: Defaults.values.dim_when
+        property int dim_from: Defaults.values.dim_from
+        property int dim_to: Defaults.values.dim_to
+        property bool dim_cutoff: Defaults.values.dim_cutoff
+        property int dim_cutoff_lux: Defaults.values.dim_cutoff_lux
         // "none", "protan", "deutan", "tritan" or "greyscale" (Correction in
         // the plugin)
-        property string correction: "none"
-        property int correction_strength: 50
+        property string correction: Defaults.values.correction
+        property int correction_strength: Defaults.values.correction_strength
         // Written by the plugin from mce's AlsValueMultiplier, so that the
         // light reading below is in the same units as the threshold
         property real als_multiplier: 1.0
@@ -66,6 +68,19 @@ Page {
         property int sun_rise: -1
         property real sun_latitude: 0
     }
+
+    // The sliders' and menus' values. Silica's Slider and ComboBox replace a
+    // plain binding when the user moves or picks; these keep following the
+    // settings (Reset to defaults, or a change from elsewhere).
+    Binding { target: warmthSlider; property: "value"; value: (page.neutralTemperature - config.temperature) / 100 }
+    Binding { target: saturationSlider; property: "value"; value: config.saturation }
+    Binding { target: whenCombo; property: "currentIndex"; value: page.whenIndex }
+    Binding { target: transitionCombo; property: "currentIndex"; value: Math.max(0, page.transitionSteps.indexOf(config.schedule_transition)) }
+    Binding { target: dimSlider; property: "value"; value: config.dim }
+    Binding { target: dimWhenCombo; property: "currentIndex"; value: Math.max(0, page.dimWhenNames.indexOf(config.dim_when)) }
+    Binding { target: thresholdSlider; property: "value"; value: page.luxStepIndex(config.dim_cutoff_lux) }
+    Binding { target: correctionCombo; property: "currentIndex"; value: page.correctionNames.indexOf(page.correction) }
+    Binding { target: strengthSlider; property: "value"; value: config.correction_strength }
 
     // ColorTemperature::Neutral and Minimum: from no tint to no blue left
     readonly property int neutralTemperature: 6500
@@ -202,6 +217,18 @@ Page {
             lines.push("no diagnostics from this version")
         }
         return lines.join("\n")
+    }
+
+    // Every setting back to its default, the hidden ones too. A key that is
+    // unset doesn't change the page's value (Nemo.Configuration ignores
+    // it), so the page gets the default first.
+    function resetSettings() {
+        for (var key in Defaults.values) {
+            config[key] = Defaults.values[key]
+            config.setValue(key, undefined)
+        }
+        for (var i = 0; i < Defaults.hiddenKeys.length; ++i)
+            config.setValue(Defaults.hiddenKeys[i], undefined)
     }
 
     function openDiagnostics() {
@@ -488,6 +515,10 @@ Page {
 
         PullDownMenu {
             MenuItem {
+                text: "Reset to defaults"
+                onClicked: Remorse.popupAction(page, "Reset to defaults", page.resetSettings)
+            }
+            MenuItem {
                 text: "Report a bug"
                 onClicked: page.reportBug()
             }
@@ -550,13 +581,13 @@ Page {
             }
 
             Slider {
+                id: warmthSlider
                 width: parent.width
                 label: "Warmth"
                 // Left is no tint, right is no blue left, in 100 K steps
                 minimumValue: 0
                 maximumValue: (page.neutralTemperature - page.minimumTemperature) / 100
                 stepSize: 1
-                value: (page.neutralTemperature - config.temperature) / 100
                 valueText: {
                     var kelvin = page.neutralTemperature - Math.round(sliderValue) * 100
                     if (kelvin === page.neutralTemperature)
@@ -574,6 +605,7 @@ Page {
             }
 
             Slider {
+                id: saturationSlider
                 enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 width: parent.width
@@ -581,7 +613,6 @@ Page {
                 minimumValue: 0
                 maximumValue: 100
                 stepSize: 5
-                value: config.saturation
                 valueText: {
                     var saturation = Math.round(sliderValue)
                     if (saturation === 100)
@@ -608,8 +639,8 @@ Page {
             }
 
             ComboBox {
+                id: whenCombo
                 label: "When"
-                currentIndex: page.whenIndex
 
                 menu: ContextMenu {
                     // Same order as page.whenIndex
@@ -711,10 +742,10 @@ Page {
             }
 
             ComboBox {
+                id: transitionCombo
                 visible: config.schedule
                 label: "Gradual change"
                 description: "Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise."
-                currentIndex: Math.max(0, page.transitionSteps.indexOf(config.schedule_transition))
 
                 menu: ContextMenu {
                     // Same order as page.transitionSteps
@@ -740,12 +771,12 @@ Page {
             }
 
             Slider {
+                id: dimSlider
                 width: parent.width
                 label: "Darker than the current brightness"
                 minimumValue: 0
                 maximumValue: page.maximumDim
                 stepSize: 5
-                value: config.dim
                 valueText: Math.round(sliderValue) === 0 ? "Off" : Math.round(sliderValue) + " %"
                 onSliderValueChanged: {
                     var dim = Math.round(sliderValue)
@@ -755,9 +786,9 @@ Page {
             }
 
             ComboBox {
+                id: dimWhenCombo
                 visible: page.dimming
                 label: "When"
-                currentIndex: Math.max(0, page.dimWhenNames.indexOf(config.dim_when))
 
                 menu: ContextMenu {
                     // Same order as page.dimWhenNames
@@ -808,7 +839,6 @@ Page {
                 minimumValue: 0
                 maximumValue: page.luxSteps.length - 1
                 stepSize: 1
-                value: page.luxStepIndex(config.dim_cutoff_lux)
                 valueText: page.formatLux(page.luxSteps[Math.round(sliderValue)])
                 onSliderValueChanged: {
                     var lux = page.luxSteps[Math.round(sliderValue)]
@@ -855,6 +885,7 @@ Page {
             }
 
             ComboBox {
+                id: correctionCombo
                 enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 label: "Correction"
@@ -871,7 +902,6 @@ Page {
                     // screen's edge
                     return "Makes colours you confuse easier to tell apart. Set the strength below."
                 }
-                currentIndex: page.correctionNames.indexOf(page.correction)
 
                 menu: ContextMenu {
                     // Same order as page.correctionNames
@@ -899,6 +929,7 @@ Page {
             }
 
             Slider {
+                id: strengthSlider
                 // Greyscale is always full
                 visible: page.correction !== "none" && page.correction !== "greyscale"
                 enabled: page.matrixSupported
@@ -909,7 +940,6 @@ Page {
                 minimumValue: 0
                 maximumValue: 100
                 stepSize: 5
-                value: config.correction_strength
                 valueText: Math.round(sliderValue) + " %"
                 onSliderValueChanged: {
                     var strength = Math.round(sliderValue)
