@@ -343,7 +343,9 @@ dconf write /apps/owlfish/latitude 60.17         # degrees, north positive
 dconf write /apps/owlfish/longitude 24.94        # degrees, east positive
 dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend, fetch (GPU), pq or qualcomm (display hardware); not on the settings page
 dconf read /apps/owlfish/sun_state               # written by the plugin, e.g. 'normal'
-dconf reset -f /apps/owlfish/                    # back to defaults
+dconf reset -f /apps/owlfish/                    # back to defaults, as the page's Reset does; then
+dbus-send --session --dest=io.github.ccontino84.owlfish /owlfish io.github.ccontino84.owlfish.reload
+                                                 # the plugin re-reads it and writes its own keys again
 ```
 
 ## Build

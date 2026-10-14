@@ -504,6 +504,7 @@ private slots:
     void status();
     void statusCrashGuard();
     void statusOnDBus();
+    void reloadAfterReset();
     void linearGain();
     void pqFixedPoint();
     void pqDeviceId();
@@ -1332,6 +1333,8 @@ void tst_Owlfish::statusOnDBus()
     QCOMPARE(reply.value(), QStringLiteral(OWLFISH_VERSION));
     QVERIFY(QRegularExpression(QStringLiteral("^\\d+\\.\\d+\\.\\d+")).match(reply.value()).hasMatch());
     QVERIFY(remote.call(QStringLiteral("resetCrashGuard")).type() == QDBusMessage::ReplyMessage);
+    // Before the window: nothing to fetch yet
+    QVERIFY(remote.call(QStringLiteral("reload")).type() == QDBusMessage::ReplyMessage);
     reply = remote.call(QStringLiteral("renderer"));
     QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
     QCOMPARE(reply.value(), QStringLiteral("none"));
@@ -1345,6 +1348,40 @@ void tst_Owlfish::statusOnDBus()
     QVERIFY(!reply.value().contains(QStringLiteral("\nsystem unknown\n")));
 
     bus.unregisterService(QLatin1String(OwlfishStatusService::ServiceName));
+}
+
+void tst_Owlfish::reloadAfterReset()
+{
+    // "Reset to defaults" unsets everything, the plugin's own keys too; the
+    // plugin then works them out again from scratch
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_LOCATION_MANUAL", "1");
+    qputenv("OWLFISH_LATITUDE", "45.46");
+    qputenv("OWLFISH_LONGITUDE", "9.19");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log, false)));
+    qunsetenv("OWLFISH_LOCATION_MANUAL");
+    qunsetenv("OWLFISH_LATITUDE");
+    qunsetenv("OWLFISH_LONGITUDE");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    OwlfishSettings *settings = controller->settings();
+    QTRY_VERIFY(settings->published(QStringLiteral("sun_state")).isValid());
+    const QVariant sunset = settings->published(QStringLiteral("sun_set"));
+    QVERIFY(sunset.isValid());
+    QVERIFY(settings->published(QStringLiteral("als_multiplier")).isValid());
+
+    controller->reload();
+    // Written again at once, not only when the date or the zone changes
+    QCOMPARE(settings->published(QStringLiteral("sun_state")).toString(), QStringLiteral("normal"));
+    QCOMPARE(settings->published(QStringLiteral("sun_set")), sunset);
+    QCOMPARE(settings->published(QStringLiteral("sun_latitude")).toDouble(), 45.46);
+    QVERIFY(settings->published(QStringLiteral("als_multiplier")).isValid());
+    // And the settings applied again
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
 }
 
 void tst_Owlfish::linearGain()

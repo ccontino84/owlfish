@@ -121,6 +121,10 @@ public:
     int dimTo() const;
 
     void publishAlsMultiplier(double multiplier);
+    // Reads every setting again and forgets what the plugin wrote, so that
+    // the next publish() writes it whatever dconf has. After "Reset to
+    // defaults", which unsets the whole path at once. No changed() signal.
+    void reload();
     // Writes one of the keys the plugin writes, if it changed. An invalid
     // value unsets it.
     void publish(const QString &key, const QVariant &value);
@@ -140,26 +144,28 @@ signals:
 
 private:
 #ifdef HAVE_MLITE
-    MDConfItem *m_enabled;
-    MDConfItem *m_temperature;
-    MDConfItem *m_dim;
-    MDConfItem *m_cutoffEnabled;
-    MDConfItem *m_cutoffLux;
-    MDConfItem *m_scheduled;
-    MDConfItem *m_scheduleSun;
-    MDConfItem *m_scheduleFrom;
-    MDConfItem *m_scheduleTo;
-    MDConfItem *m_scheduleTransition;
-    MDConfItem *m_locationManual;
-    MDConfItem *m_latitude;
-    MDConfItem *m_longitude;
-    MDConfItem *m_renderer;
-    MDConfItem *m_saturation;
-    MDConfItem *m_correction;
-    MDConfItem *m_correctionStrength;
-    MDConfItem *m_dimWhen;
-    MDConfItem *m_dimFrom;
-    MDConfItem *m_dimTo;
+    void createItems();
+
+    MDConfItem *m_enabled = nullptr;
+    MDConfItem *m_temperature = nullptr;
+    MDConfItem *m_dim = nullptr;
+    MDConfItem *m_cutoffEnabled = nullptr;
+    MDConfItem *m_cutoffLux = nullptr;
+    MDConfItem *m_scheduled = nullptr;
+    MDConfItem *m_scheduleSun = nullptr;
+    MDConfItem *m_scheduleFrom = nullptr;
+    MDConfItem *m_scheduleTo = nullptr;
+    MDConfItem *m_scheduleTransition = nullptr;
+    MDConfItem *m_locationManual = nullptr;
+    MDConfItem *m_latitude = nullptr;
+    MDConfItem *m_longitude = nullptr;
+    MDConfItem *m_renderer = nullptr;
+    MDConfItem *m_saturation = nullptr;
+    MDConfItem *m_correction = nullptr;
+    MDConfItem *m_correctionStrength = nullptr;
+    MDConfItem *m_dimWhen = nullptr;
+    MDConfItem *m_dimFrom = nullptr;
+    MDConfItem *m_dimTo = nullptr;
     QHash<QString, MDConfItem *> m_publishedItems;
 #else
     bool m_enabled;

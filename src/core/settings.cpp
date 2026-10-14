@@ -94,11 +94,6 @@ QString normalizeDimWhen(const QString &value)
 
 namespace {
 
-MDConfItem *item(const char *key, QObject *parent)
-{
-    return new MDConfItem(QStringLiteral("/apps/owlfish/") + QLatin1String(key), parent);
-}
-
 double checkDegrees(const QVariant &value, double limit)
 {
     bool ok = false;
@@ -110,34 +105,51 @@ double checkDegrees(const QVariant &value, double limit)
 
 OwlfishSettings::OwlfishSettings(QObject *parent)
     : QObject(parent)
-    , m_enabled(item("enabled", this))
-    , m_temperature(item("temperature", this))
-    , m_dim(item("dim", this))
-    , m_cutoffEnabled(item("dim_cutoff", this))
-    , m_cutoffLux(item("dim_cutoff_lux", this))
-    , m_scheduled(item("schedule", this))
-    , m_scheduleSun(item("schedule_sun", this))
-    , m_scheduleFrom(item("schedule_from", this))
-    , m_scheduleTo(item("schedule_to", this))
-    , m_scheduleTransition(item("schedule_transition", this))
-    , m_locationManual(item("location_manual", this))
-    , m_latitude(item("latitude", this))
-    , m_longitude(item("longitude", this))
-    , m_renderer(item("renderer", this))
-    , m_saturation(item("saturation", this))
-    , m_correction(item("correction", this))
-    , m_correctionStrength(item("correction_strength", this))
-    , m_dimWhen(item("dim_when", this))
-    , m_dimFrom(item("dim_from", this))
-    , m_dimTo(item("dim_to", this))
+{
+    createItems();
+}
+
+void OwlfishSettings::createItems()
 {
     // Not the keys only the plugin writes
-    for (MDConfItem *item : { m_enabled, m_temperature, m_dim, m_cutoffEnabled, m_cutoffLux,
-                              m_scheduled, m_scheduleSun, m_scheduleFrom, m_scheduleTo,
-                              m_scheduleTransition, m_locationManual, m_latitude, m_longitude,
-                              m_renderer, m_saturation, m_dimWhen, m_dimFrom, m_dimTo,
-                              m_correction, m_correctionStrength })
+    struct Key { MDConfItem *OwlfishSettings::*item; const char *name; };
+    static const Key keys[] = {
+        { &OwlfishSettings::m_enabled, "enabled" },
+        { &OwlfishSettings::m_temperature, "temperature" },
+        { &OwlfishSettings::m_dim, "dim" },
+        { &OwlfishSettings::m_cutoffEnabled, "dim_cutoff" },
+        { &OwlfishSettings::m_cutoffLux, "dim_cutoff_lux" },
+        { &OwlfishSettings::m_scheduled, "schedule" },
+        { &OwlfishSettings::m_scheduleSun, "schedule_sun" },
+        { &OwlfishSettings::m_scheduleFrom, "schedule_from" },
+        { &OwlfishSettings::m_scheduleTo, "schedule_to" },
+        { &OwlfishSettings::m_scheduleTransition, "schedule_transition" },
+        { &OwlfishSettings::m_locationManual, "location_manual" },
+        { &OwlfishSettings::m_latitude, "latitude" },
+        { &OwlfishSettings::m_longitude, "longitude" },
+        { &OwlfishSettings::m_renderer, "renderer" },
+        { &OwlfishSettings::m_saturation, "saturation" },
+        { &OwlfishSettings::m_correction, "correction" },
+        { &OwlfishSettings::m_correctionStrength, "correction_strength" },
+        { &OwlfishSettings::m_dimWhen, "dim_when" },
+        { &OwlfishSettings::m_dimFrom, "dim_from" },
+        { &OwlfishSettings::m_dimTo, "dim_to" },
+    };
+    for (const Key &key : keys) {
+        MDConfItem *&item = this->*key.item;
+        delete item;
+        item = new MDConfItem(QStringLiteral("/apps/owlfish/") + QLatin1String(key.name), this);
         connect(item, &MDConfItem::valueChanged, this, &OwlfishSettings::changed);
+    }
+}
+
+void OwlfishSettings::reload()
+{
+    // New items read dconf as it is now
+    createItems();
+    // The plugin's own keys are written again, whatever dconf had
+    qDeleteAll(m_publishedItems);
+    m_publishedItems.clear();
 }
 
 bool OwlfishSettings::enabled() const
@@ -295,6 +307,12 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_dimFrom(clampMinuteOfDay(env("dim_from", DefaultFrom), DefaultFrom))
     , m_dimTo(clampMinuteOfDay(env("dim_to", DefaultTo), DefaultTo))
 {
+}
+
+void OwlfishSettings::reload()
+{
+    // The environment is read once; only what the plugin wrote starts over
+    m_published.clear();
 }
 
 bool OwlfishSettings::enabled() const

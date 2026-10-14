@@ -221,16 +221,17 @@ Page {
         return lines.join("\n")
     }
 
-    // Every setting back to its default, the hidden ones too. A key that is
-    // unset doesn't change the page's value (Nemo.Configuration ignores
-    // it), so the page gets the default first.
+    // Every key back to its default: the page's own values first (an unset
+    // key doesn't change them), then everything under the path, hidden and
+    // old keys too. The plugin then reads its settings again and works out
+    // its own keys (light sensor, sun times) from scratch; if it isn't
+    // running, it does that when it starts.
     function resetSettings() {
-        for (var key in Defaults.values) {
+        for (var key in Defaults.values)
             config[key] = Defaults.values[key]
-            config.setValue(key, undefined)
-        }
-        for (var i = 0; i < Defaults.hiddenKeys.length; ++i)
-            config.setValue(Defaults.hiddenKeys[i], undefined)
+        config.clear()
+        config.sync()
+        plugin.typedCall("reload", [])
     }
 
     function openDiagnostics() {

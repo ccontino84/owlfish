@@ -286,10 +286,7 @@ void OwlfishController::attach(QQuickWindow *window)
 
     qCInfo(lcOwlfish) << "Filter attached to" << window->metaObject()->className();
 
-    m_alsMultiplier = alsValueMultiplier();
-    qCInfo(lcOwlfish) << "Ambient light sensor multiplier" << m_alsMultiplier;
-    m_settings->publishAlsMultiplier(m_alsMultiplier);
-    querySensorMaximum();
+    refreshPublished();
 
     // Catch up with the schedule as soon as the display turns on. The timer
     // does not run during suspend.
@@ -301,6 +298,30 @@ void OwlfishController::attach(QQuickWindow *window)
 
     applySettings();
     m_healthyTimer.start();
+}
+
+void OwlfishController::refreshPublished()
+{
+    m_alsMultiplier = alsValueMultiplier();
+    qCInfo(lcOwlfish) << "Ambient light sensor multiplier" << m_alsMultiplier;
+    m_settings->publishAlsMultiplier(m_alsMultiplier);
+    querySensorMaximum();
+    // Looked up and calculated again at the next updateSun()
+    m_zoneLocation = TimeZoneLocation();
+    m_sunDate = QDate();
+}
+
+void OwlfishController::reload()
+{
+    // Not while the crash guard keeps the plugin inactive
+    if (!m_settings)
+        return;
+    m_settings->reload();
+    // Before the window, attach() does the rest
+    if (!m_gpu)
+        return;
+    refreshPublished();
+    applySettings();
 }
 
 void OwlfishController::applySettings()

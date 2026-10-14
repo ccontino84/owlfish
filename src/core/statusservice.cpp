@@ -48,6 +48,11 @@ void OwlfishStatusService::resetCrashGuard()
     m_controller->resetCrashGuard();
 }
 
+void OwlfishStatusService::reload()
+{
+    m_controller->reload();
+}
+
 QString OwlfishStatusService::renderer() const
 {
     return m_controller->renderer();

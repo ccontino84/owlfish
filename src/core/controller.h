@@ -58,6 +58,9 @@ public:
     QString status() const;
     // Lets the plugin try again at the next compositor start
     void resetCrashGuard();
+    // After "Reset to defaults": reads every setting again and works out
+    // from scratch what the plugin writes for the page
+    void reload();
     // The active output's name: "pq" or "qualcomm" (display hardware),
     // "fetch" or "blend" (the GPU; fetch draws only while the matrix isn't
     // the identity); "none" before the window is found
@@ -108,6 +111,10 @@ private:
     // The most the light sensor can report, for the cut-off and the page
     void querySensorMaximum();
     void updateRenderer();
+    // What the plugin writes for the page, from scratch: the light sensor's
+    // calibration and range now, the time zone's city and the sun times at
+    // the next updateSun()
+    void refreshPublished();
     void connectOutput(FilterOutput *output);
     // The filter to the GPU and to the active output
     void pushFilter();

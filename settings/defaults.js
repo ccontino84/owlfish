@@ -4,7 +4,8 @@
 .pragma library
 
 // The settings the page edits, with their defaults; they must match the
-// lipstick plugin (settings.h). "Reset to defaults" unsets these keys.
+// lipstick plugin (settings.h). "Reset to defaults" shows these, and unsets
+// every key under /apps/owlfish/.
 var values = {
     enabled: false,
     temperature: 4500,
@@ -27,8 +28,3 @@ var values = {
     correction: "none",
     correction_strength: 50
 }
-
-// Also unset by the reset: the troubleshooting key, and keys that only
-// pre-releases used. Not the keys the plugin writes (als_*, sun_*, auto_*).
-var hiddenKeys = ["renderer", "debug_renderer", "debug_matrix", "debug_transfer",
-                  "profile", "filter", "preset", "xperia_light"]
