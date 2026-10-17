@@ -231,6 +231,16 @@ from lipstick and root only.
 - **Encoded values:** the PCC works on gamma-encoded values (checked on
   the Xperia 10 III by comparing it with the GPU's dimming), so it gets the
   gain as the GPU applies it, not pq's linear-light gain.
+- **Versions:** `owlfish-qualcomm` requires `owlfish >= 1.5.0`, not the
+  same version, so the two can be installed or upgraded one at a time (an
+  exact match blocks each upgrade while the other package is the old one).
+  Until a reboot, a new helper may also talk to the old plugin still
+  running in lipstick. So the interface stays compatible: methods, their
+  arguments and the signals don't change, new ones are only added. A change
+  that can't be compatible gets a new interface name: an old plugin's
+  `Probe` then fails and it uses the GPU. `SetMatrix` and `Reset` have no
+  reply, so a removed or changed one would go unnoticed (no tint, the GPU
+  item stays hidden).
 - **On the phone:** `devel-su runuser -u graphics -- /usr/libexec/owlfish/qualcomm-helper --probe`
   checks the hardware by hand; `journalctl -u owlfish-qualcomm` shows the
   helper's messages.

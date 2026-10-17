@@ -46,7 +46,9 @@ Links:
 
 %package qualcomm
 Summary:    Owlfish in the display hardware of Qualcomm devices such as the Xperias
-Requires:   %{name} = %{version}-%{release}
+# Any owlfish with the Qualcomm client, so the two can be upgraded one at a
+# time; the helper's D-Bus interface stays compatible (DEVELOPMENT.md)
+Requires:   %{name} >= 1.5.0
 
 %description qualcomm
 Lets Owlfish apply its filter in the display hardware (Qualcomm's display
