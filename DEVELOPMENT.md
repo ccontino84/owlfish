@@ -62,24 +62,20 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 - **Crash guard:** `~/.cache/owlfish/unhealthy-starts` counts starts that
   did not reach 30 s with the filter attached; at 3 the plugin stays inactive.
 
-Source layout (`src/`):
+Source layout:
 
-| File | What |
+| Folder | What |
 |---|---|
-| `plugin.cpp` | `QGenericPlugin` entry, process/window options |
-| `controller.*` | finds the window, combines settings, schedule and light sensor into a gain, fades |
-| `colorfilteritem.*`, `colorfiltermaterial.*` | the scene graph item and its material: multiply blend, or framebuffer fetch with the matrix |
-| `pqdisplay.*` | the display hardware's colour matrix through MediaTek's PQ service |
-| `colormatrix.*` | the saturation matrix, and the gain in linear light for the display hardware |
-| `correction.*` | the colour correction matrices (protan, deutan, tritan, greyscale) |
-| `colortemperature.*` | kelvin → per-channel gain |
-| `schedule.*` | the daily window and its transitions |
-| `sun.*` | sunset and sunrise (NOAA's solar equations) |
-| `timezonelocation.*` | the system time zone and its city's coordinates from tzdata |
-| `ambientcutoff.*`, `alscalibration.*` | bright-light hysteresis and debounce; mce's `AlsValueMultiplier` |
-| `settings.*` | dconf keys (mlite `MDConfItem`); environment variables in host builds |
-| `crashguard.*` | the unhealthy-start counter |
-| `statusservice.*` | the D-Bus status for the settings page and support |
+| `src/` | `plugin.cpp` (`QGenericPlugin` entry, process/window options), `owlfish.pri` (all sources; tests include it) |
+| `src/core/` | `controller.*` (finds the window, combines settings, schedule and light sensor into a gain, fades); `settings.*` (dconf keys via mlite `MDConfItem`; environment variables in host builds); `statusservice.*` (D-Bus status for the settings page and support); `crashguard.*` (the unhealthy-start counter); `logging.*` |
+| `src/colour/` | `colortemperature.*` (kelvin → per-channel gain); `colormatrix.*` (saturation, the gain in linear light); `correction.*` (protan, deutan, tritan, greyscale) |
+| `src/schedule/` | `schedule.*` (the daily window and its transitions); `sun.*` (NOAA's solar equations); `timezonelocation.*` (the time zone's city from tzdata) |
+| `src/sensor/` | `ambientcutoff.*` (bright-light hysteresis and debounce); `alscalibration.*` (mce's `AlsValueMultiplier`) |
+| `src/output/gpu/` | `colorfilteritem.*`, `colorfiltermaterial.*` (the scene graph item and its material: multiply blend, or framebuffer fetch with the matrix) |
+| `src/output/mediatek/` | `pqdisplay.*` (MediaTek's PQ service through libgbinder) |
+| `config/` | `update-env`: run by the RPM's `%post` |
+| `settings/` | the settings page (QML) |
+| `tests/` | host tests (QtTest) |
 
 ### How the colour is computed
 

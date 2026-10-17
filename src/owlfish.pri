@@ -1,7 +1,17 @@
 # SPDX-FileCopyrightText: 2026 ccontino84
 # SPDX-License-Identifier: LGPL-2.1-only
 
+# One folder per part; the include paths keep #include "name.h" working
+# from anywhere
+#   core      the controller, settings, D-Bus status, crash guard, logging
+#   colour    colour maths: matrices, temperature, corrections
+#   schedule  the night's times: fixed, sunset to sunrise, time zone city
+#   sensor    the ambient light cut-off
+#   output    where the filter is applied: the GPU, or the display hardware
+#             (MediaTek's PQ service)
+OWLFISH_DIRS = core colour schedule sensor output/gpu output/mediatek
 INCLUDEPATH += $$PWD
+for(dir, OWLFISH_DIRS): INCLUDEPATH += $$PWD/$$dir
 
 # mce display state, for the schedule; the status for the settings page
 QT += dbus
@@ -9,40 +19,40 @@ QT += dbus
 LIBS += -ldl
 
 HEADERS += \
-    $$PWD/alscalibration.h \
-    $$PWD/ambientcutoff.h \
-    $$PWD/colorfilteritem.h \
-    $$PWD/colorfiltermaterial.h \
-    $$PWD/colormatrix.h \
-    $$PWD/colortemperature.h \
-    $$PWD/correction.h \
-    $$PWD/controller.h \
-    $$PWD/crashguard.h \
-    $$PWD/logging.h \
-    $$PWD/pqdisplay.h \
-    $$PWD/schedule.h \
-    $$PWD/settings.h \
-    $$PWD/statusservice.h \
-    $$PWD/sun.h \
-    $$PWD/timezonelocation.h
+    $$PWD/core/controller.h \
+    $$PWD/core/crashguard.h \
+    $$PWD/core/logging.h \
+    $$PWD/core/settings.h \
+    $$PWD/core/statusservice.h \
+    $$PWD/colour/colormatrix.h \
+    $$PWD/colour/colortemperature.h \
+    $$PWD/colour/correction.h \
+    $$PWD/schedule/schedule.h \
+    $$PWD/schedule/sun.h \
+    $$PWD/schedule/timezonelocation.h \
+    $$PWD/sensor/alscalibration.h \
+    $$PWD/sensor/ambientcutoff.h \
+    $$PWD/output/gpu/colorfilteritem.h \
+    $$PWD/output/gpu/colorfiltermaterial.h \
+    $$PWD/output/mediatek/pqdisplay.h
 
 SOURCES += \
-    $$PWD/alscalibration.cpp \
-    $$PWD/ambientcutoff.cpp \
-    $$PWD/colorfilteritem.cpp \
-    $$PWD/colorfiltermaterial.cpp \
-    $$PWD/colormatrix.cpp \
-    $$PWD/colortemperature.cpp \
-    $$PWD/correction.cpp \
-    $$PWD/controller.cpp \
-    $$PWD/crashguard.cpp \
-    $$PWD/logging.cpp \
-    $$PWD/pqdisplay.cpp \
-    $$PWD/schedule.cpp \
-    $$PWD/settings.cpp \
-    $$PWD/statusservice.cpp \
-    $$PWD/sun.cpp \
-    $$PWD/timezonelocation.cpp
+    $$PWD/core/controller.cpp \
+    $$PWD/core/crashguard.cpp \
+    $$PWD/core/logging.cpp \
+    $$PWD/core/settings.cpp \
+    $$PWD/core/statusservice.cpp \
+    $$PWD/colour/colormatrix.cpp \
+    $$PWD/colour/colortemperature.cpp \
+    $$PWD/colour/correction.cpp \
+    $$PWD/schedule/schedule.cpp \
+    $$PWD/schedule/sun.cpp \
+    $$PWD/schedule/timezonelocation.cpp \
+    $$PWD/sensor/alscalibration.cpp \
+    $$PWD/sensor/ambientcutoff.cpp \
+    $$PWD/output/gpu/colorfilteritem.cpp \
+    $$PWD/output/gpu/colorfiltermaterial.cpp \
+    $$PWD/output/mediatek/pqdisplay.cpp
 
 # The package version, for the settings page; the spec is the one source.
 # It goes into a generated header, rewritten only when it changes, so that
