@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 ccontino84
+# SPDX-License-Identifier: LGPL-2.1-only
+
+# Started by D-Bus activation when Owlfish's plugin in lipstick asks for it.
+# Installed by the owlfish-qualcomm package; without Qualcomm's display
+# colour manager its check fails and it quits.
+[Unit]
+Description=Owlfish display colour helper for Qualcomm devices
+ConditionPathExists=/vendor/bin/vndservice
+
+[Service]
+Type=dbus
+BusName=io.github.ccontino84.owlfish.Qualcomm
+# The composer's QService only accepts a few system users; the user's own
+# group (the probes only proved the user exists)
+User=graphics
+ExecStart=/usr/libexec/owlfish/qualcomm-helper
+# Also after a crash: the display colours back to normal
+ExecStopPost=/usr/libexec/owlfish/qualcomm-helper --reset
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=full
+PrivateTmp=yes

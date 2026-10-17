@@ -120,9 +120,9 @@ Page {
     // Same order as the dimming's "When" menu
     readonly property var dimWhenNames: ["always", "fixed", "night_light"]
 
-    // OwlfishController::renderer() of the running plugin: "pq" (display
-    // hardware), "fetch" or "blend" (GPU), "none" before it has a window; empty
-    // without a reply
+    // OwlfishController::renderer() of the running plugin: "pq" or "qualcomm"
+    // (display hardware), "fetch" or "blend" (GPU), "none" before it has a
+    // window; empty without a reply
     property string pluginRenderer: ""
     // Only the display hardware and fetch (GPU) can change the saturation
     // and correct colours. "blend" means fetch doesn't work or is turned

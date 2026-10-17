@@ -51,10 +51,13 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   `QSGRenderNode`, which in Qt 5.6 turns off the renderer's depth-buffer
   optimisation for the whole compositor scene. With gain (1, 1, 1) the node
   is removed.
-- **Renderer:** on verified devices the display hardware applies the gain
-  instead (`pq`), at no GPU cost; everywhere else the item draws it
-  (`fetch` while there is a matrix to apply, `blend` otherwise). See
-  below.
+- **Outputs:** the controller fades the filter (a gain and a matrix) and
+  hands every step to one output (`FilterOutput`): the display hardware
+  where it works (`pq` on MediaTek, `qualcomm` on Qualcomm), at no GPU cost,
+  else the GPU (`fetch` while there is a matrix to apply, `blend`
+  otherwise). Each output turns the filter into what it applies. The GPU's
+  item always gets the filter too, hidden while the hardware applies it, so
+  it takes over at once if a hardware call fails. See below.
 - **Scope:** the plugin only activates inside the `lipstick` executable, even
   if the environment variable leaks into child processes. It is built with
   hidden symbols (it exports only `qt_plugin_*`), so none of its symbols can
@@ -67,15 +70,21 @@ Source layout:
 | Folder | What |
 |---|---|
 | `src/` | `plugin.cpp` (`QGenericPlugin` entry, process/window options), `owlfish.pri` (all sources; tests include it) |
-| `src/core/` | `controller.*` (finds the window, combines settings, schedule and light sensor into a gain, fades); `settings.*` (dconf keys via mlite `MDConfItem`; environment variables in host builds); `statusservice.*` (D-Bus status for the settings page and support); `crashguard.*` (the unhealthy-start counter); `logging.*` |
+| `src/core/` | `controller.*` (finds the window, combines settings, schedule and light sensor into the filter, fades, picks the output); `settings.*` (dconf keys via mlite `MDConfItem`; environment variables in host builds); `statusservice.*` (D-Bus status for the settings page and support); `crashguard.*` (the unhealthy-start counter); `logging.*` |
 | `src/colour/` | `colortemperature.*` (kelvin → per-channel gain); `colormatrix.*` (saturation, the gain in linear light); `correction.*` (protan, deutan, tritan, greyscale) |
 | `src/schedule/` | `schedule.*` (the daily window and its transitions); `sun.*` (NOAA's solar equations); `timezonelocation.*` (the time zone's city from tzdata) |
 | `src/sensor/` | `ambientcutoff.*` (bright-light hysteresis and debounce); `alscalibration.*` (mce's `AlsValueMultiplier`) |
-| `src/output/gpu/` | `colorfilteritem.*`, `colorfiltermaterial.*` (the scene graph item and its material: multiply blend, or framebuffer fetch with the matrix) |
-| `src/output/mediatek/` | `pqdisplay.*` (MediaTek's PQ service through libgbinder) |
+| `src/output/` | `filteroutput.*`: the interface every output implements |
+| `src/output/gpu/` | `gpuoutput.*` (the output); `colorfilteritem.*`, `colorfiltermaterial.*` (the scene graph item and its material: multiply blend, or framebuffer fetch with the matrix) |
+| `src/output/mediatek/` | `mediatekoutput.*` (the output); `pqdisplay.*` (MediaTek's PQ service through libgbinder) |
+| `src/output/qualcomm/` | `qualcommoutput.*` (the output); `qualcommclient.*` (the client of the Qualcomm helper on the system bus) |
+| `qualcomm-helper/` | `qualcomm-helper`, the system service that sets Qualcomm's display colour matrix (`helper.*`, `qdcm.*`, `main.cpp`, `system/`); packaged as `owlfish-qualcomm` |
 | `config/` | `update-env`: run by the RPM's `%post` |
 | `settings/` | the settings page (QML) |
 | `tests/` | host tests (QtTest) |
+
+A new kind of display hardware is a new folder under `src/output/` with a
+`FilterOutput`, added to the controller's order in `updateRenderer()`.
 
 ### How the colour is computed
 
@@ -189,6 +198,43 @@ known.
 The research behind this (the service's calls, the phone tests) is outside
 the repository.
 
+### Display hardware on Qualcomm devices (`qualcomm`)
+
+Qualcomm's display colour manager (QDCM) in the composer has a global PCC
+(a 3×3 matrix per output channel) that does the same job. It is set through
+the composer's QService (`display.qservice`, command 24) on
+`/dev/vndbinder`, which only accepts a few system users, and libgbinder
+can't write the vendor binder's header. So the separate package
+`owlfish-qualcomm` (built from the same spec) installs `qualcomm-helper`
+(`qualcomm-helper/`), a system service running as `graphics`; installing it
+enables it. It calls Android's `/vendor/bin/vndservice` for each change
+(`qdcm.*`: arguments, reply parsing, the session) and offers
+`Probe`, `SetMatrix(ad)` and `Reset` on the system bus
+(`io.github.ccontino84.owlfish.Qualcomm`, D-Bus activated). It accepts calls
+from lipstick and root only.
+
+- **Choice:** where the MediaTek check doesn't apply and the helper's
+  activation file exists, the plugin asks the helper to check the hardware
+  (identity set, read back, turned off) and draws with the GPU until it
+  answers; after a failed check the helper quits. Nothing is called on
+  devices without the package.
+- **Calls are asynchronous:** the helper applies the latest matrix and drops
+  older ones that arrived meanwhile (a call takes tens of milliseconds), then
+  signals `Applied`, and the plugin draws a frame: the command-mode panel only
+  shows the new matrix with one. `Failed` hands over to the GPU for the
+  rest of the run.
+- **The display forgets the matrix when it turns off**, while the composer
+  still reports it as set, so the helper sends it again when mce reports the
+  display on. A lipstick restart restarts the composer, which clears it.
+- **Reset:** the helper turns the PCC off when lipstick leaves the bus, and
+  `ExecStopPost=qualcomm-helper --reset` covers the helper itself.
+- **Encoded values:** the PCC works on gamma-encoded values (checked on
+  the Xperia 10 III by comparing it with the GPU's dimming), so it gets the
+  gain as the GPU applies it, not pq's linear-light gain.
+- **On the phone:** `devel-su runuser -u graphics -- /usr/libexec/owlfish/qualcomm-helper --probe`
+  checks the hardware by hand; `journalctl -u owlfish-qualcomm` shows the
+  helper's messages.
+
 ### Schedule
 
 The start and end may cross midnight; equal times mean the colour stays
@@ -295,7 +341,7 @@ dconf write /apps/owlfish/schedule_transition 30 # minutes, 0-120, default 60
 dconf write /apps/owlfish/location_manual true   # sun at the coordinates below, default false
 dconf write /apps/owlfish/latitude 60.17         # degrees, north positive
 dconf write /apps/owlfish/longitude 24.94        # degrees, east positive
-dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend, fetch (GPU) or pq; not on the settings page
+dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend, fetch (GPU), pq or qualcomm (display hardware); not on the settings page
 dconf read /apps/owlfish/sun_state               # written by the plugin, e.g. 'normal'
 dconf reset -f /apps/owlfish/                    # back to defaults
 ```
@@ -321,6 +367,8 @@ QT_QPA_PLATFORM=xcb QSG_RENDER_LOOP=basic xvfb-run -a -s "-screen 0 640x480x24" 
 
 `QT_QPA_PLATFORM=xcb` matters in a Wayland session: otherwise the tests render
 on the desktop (possibly scaled) instead of Xvfb, and the pixel checks fail.
+With a GPU driver that lacks framebuffer fetch, add `LIBGL_ALWAYS_SOFTWARE=1`
+(Mesa's llvmpipe has it) so the `fetch` tests run instead of being skipped.
 In host builds the settings come from `OWLFISH_<KEY>` environment variables
 (e.g. `OWLFISH_DIM=50`) instead of dconf.
 
@@ -339,7 +387,12 @@ lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
 guard, the D-Bus status, `update-env` against sample environment files,
 the display hardware with a fake PQ service (fixed point, device list,
 selection, fades, resets, handover, failure, crash guard; without
-libgbinder on the host, `pq` falls back to the GPU), the saturation
+libgbinder on the host, `pq` falls back to the GPU), the Qualcomm route
+(the helper's QDCM requests and replies against output recorded on the
+Xperia 10 III, its session with a fake composer, coalescing, the re-send
+at display on, the plugin's output with a fake helper, the order of the
+outputs, and the plugin talking to the real helper class over the session
+bus, skipped without one), the saturation
 (matrix, with the schedule, through the fake PQ service and fetch, ignored
 with `blend`), the dimming's `dim_when` (always, fixed, with Night light's times
 but not its gradual change),
@@ -355,11 +408,14 @@ The defaults are `class=LipstickCompositor:process=lipstick`.
 Enable Developer mode and check that SSH works (USB `192.168.2.15`, or Wi-Fi).
 
 ```sh
-scp RPMS/owlfish-*.aarch64.rpm defaultuser@192.168.2.15:
+scp RPMS/owlfish-[0-9]*.aarch64.rpm defaultuser@192.168.2.15:
 ssh defaultuser@192.168.2.15
-devel-su pkcon install-local owlfish-*.aarch64.rpm
+devel-su pkcon install-local owlfish-[0-9]*.aarch64.rpm
 systemctl --user restart lipstick          # closes open apps
 ```
+
+On a Qualcomm device (Xperia), copy and install `owlfish-qualcomm-*.aarch64.rpm`
+as well.
 
 Close the Settings app if it was open, so it picks up the new page. Check:
 
@@ -397,11 +453,11 @@ needing a fix.
 2. On GitHub: **Actions > Release > Run workflow**, from the release branch.
    It checks that `v<Version>` does not exist yet, that `CHANGELOG.md` has
    its entry and that `main` can fast-forward to the commit. It then runs
-   the tests, builds the aarch64 and armv7hl RPMs against the Sailfish OS
-   5.1.0.11 SDK targets, and creates the release `v<Version>` for that
-   commit with both RPMs attached. The release text is the changelog entry
-   (`ci/release-notes.sh <version>`), then GitHub's generated notes. By
-   default the release is a draft.
+   the tests, builds `owlfish` and `owlfish-qualcomm` for aarch64 and
+   armv7hl against the Sailfish OS 5.1.0.11 SDK targets, and creates the
+   release `v<Version>` for that commit with the four RPMs attached. The
+   release text is the changelog entry (`ci/release-notes.sh <version>`),
+   then GitHub's generated notes. By default the release is a draft.
 3. If it fails: fix it on the branch, delete the draft if one was created,
    push and run it again. `main` hasn't changed.
 4. If it works: fast-forward `main` to the same commit

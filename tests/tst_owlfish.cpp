@@ -8,6 +8,8 @@
 #include "colortemperature.h"
 #include "correction.h"
 #include "controller.h"
+#include "mediatekoutput.h"
+#include "qualcommoutput.h"
 #include "crashguard.h"
 #include <owlfish_version.h>
 #include "pqdisplay.h"
@@ -16,6 +18,9 @@
 #include "statusservice.h"
 #include "sun.h"
 #include "timezonelocation.h"
+#include "qualcommclient.h"
+#include "helper.h"
+#include "qdcm.h"
 
 #include <QDBusInterface>
 #include <QDBusMetaType>
@@ -31,6 +36,8 @@
 #include <QtTest>
 
 #include <cmath>
+#include <cstring>
+#include <unistd.h>
 
 namespace {
 
@@ -224,6 +231,159 @@ QVector<int> pqMatrixOf(const QMatrix3x3 &matrix)
     return result;
 }
 
+struct QualcommLog
+{
+    bool installed = true;
+    int probes = 0;
+    // The pending check's answer
+    std::function<void(bool, const QString &)> answer;
+    QVector<QVector<double>> matrices;
+    int resets = 0;
+    // For the helper's signals
+    QualcommClient::Backend *backend = nullptr;
+};
+
+class FakeQualcomm : public QualcommClient::Backend
+{
+public:
+    // Without a log: not installed
+    explicit FakeQualcomm(QualcommLog *log = nullptr)
+        : m_own(log ? nullptr : new QualcommLog), m_log(log ? log : m_own.data())
+    {
+        if (m_own)
+            m_own->installed = false;
+        m_log->backend = this;
+    }
+
+    bool isInstalled() override { return m_log->installed; }
+    void probe(const std::function<void(bool, const QString &)> &done) override
+    {
+        ++m_log->probes;
+        m_log->answer = done;
+    }
+    void setMatrix(const QVector<double> &values) override { m_log->matrices << values; }
+    void reset() override { ++m_log->resets; }
+
+private:
+    QScopedPointer<QualcommLog> m_own;
+    QualcommLog *m_log;
+};
+
+// What QualcommClient sends for a matrix
+QVector<double> qualcommValues(const QMatrix3x3 &matrix)
+{
+    QVector<double> values;
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column)
+            values << std::round(double(matrix(row, column)) * 1e5) / 1e5;
+    }
+    return values;
+}
+
+// The vendor tool's output for these words, as printed on the Xperia 10 III
+QByteArray parcelOutput(const QVector<quint32> &words)
+{
+    QByteArray out = "Result: Parcel(";
+    if (words.size() <= 4) {
+        for (quint32 word : words)
+            out += QByteArray::number(word, 16).rightJustified(8, '0') + ' ';
+        return out + "'................')\n";
+    }
+    out += '\n';
+    for (int i = 0; i < words.size(); i += 4) {
+        out += "  0x" + QByteArray::number(i * 4, 16).rightJustified(8, '0') + ":";
+        for (int j = i; j < qMin(i + 4, words.size()); ++j)
+            out += ' ' + QByteArray::number(words.at(j), 16).rightJustified(8, '0');
+        out += " '.b.....?...}\"O..'";
+        out += i + 4 < words.size() ? "\n" : ")\n";
+    }
+    return out;
+}
+
+// The composer's QDCM, as far as the helper uses it
+struct FakeComposer
+{
+    quint64 session = 0;
+    bool enabled = false;
+    // Has a stored matrix (a get answers 7 until one is set)
+    bool stored = false;
+    double matrix[9] = { 0 };
+    int calls = 0;
+    // The next set answers this status, once
+    int failNextSet = 0;
+    // Sessions from before this one are unknown (a composer restart)
+    quint64 minimumSession = 0;
+    QVector<QStringList> log;
+
+    bool run(const QStringList &arguments, QByteArray *output, QString *)
+    {
+        ++calls;
+        log << arguments;
+        const QStringList &a = arguments;
+        // call display.qservice 24 i32 0 i32 <size> i32 <request> ...
+        const int request = a.value(8).toInt();
+        if (request == 0) {
+            ++session;
+            *output = parcelOutput({ 0, 8, quint32(session), 0 });
+            return true;
+        }
+        // The session follows the only i64
+        const int i64 = a.indexOf(QStringLiteral("i64"));
+        if (i64 >= 0 && a.value(i64 + 1).toULongLong() < minimumSession) {
+            *output = parcelOutput({ 7 });
+            return true;
+        }
+        if (request == 1) {
+            *output = parcelOutput({ 0 });
+        } else if (request == 103) {
+            if (failNextSet) {
+                *output = parcelOutput({ quint32(failNextSet) });
+                failNextSet = 0;
+                return true;
+            }
+            const bool valid = a.value(10) == QLatin1String("1");
+            enabled = valid;
+            stored = true;
+            if (valid) {
+                // i64 session, then display, enable, flags, padding: the
+                // doubles from argument 21 on ("d", value), 11 per row
+                for (int row = 0; row < 3; ++row) {
+                    for (int column = 0; column < 3; ++column)
+                        matrix[row * 3 + column] = a.value(22 + 2 * (row * 11 + column + 1)).toDouble();
+                }
+            }
+            *output = parcelOutput({ 0, 0 });
+        } else if (request == 102) {
+            if (!stored) {
+                *output = parcelOutput({ 7 });
+                return true;
+            }
+            QVector<quint32> words(72, 0);
+            words[1] = 0x118;
+            words[2] = 1;
+            words[3] = enabled ? 1 : 0;
+            for (int row = 0; row < 3 && enabled; ++row) {
+                for (int column = 0; column < 3; ++column) {
+                    quint64 bits;
+                    std::memcpy(&bits, &matrix[row * 3 + column], sizeof(bits));
+                    const int word = (0x18 + row * 88 + (column + 1) * 8) / 4;
+                    words[word] = quint32(bits);
+                    words[word + 1] = quint32(bits >> 32);
+                }
+            }
+            *output = parcelOutput(words);
+        }
+        return true;
+    }
+
+    Qdcm::Session::Run runner()
+    {
+        return [this](const QStringList &arguments, QByteArray *output, QString *error) {
+            return run(arguments, output, error);
+        };
+    }
+};
+
 // Minutes after midnight, offset from now
 int minutesFromNow(int offset)
 {
@@ -369,6 +529,20 @@ private slots:
     void rendererFallback();
     void rendererResetOnQuit();
     void rendererCrashGuard();
+    void qdcmArguments();
+    void qdcmParcel();
+    void qdcmAcceptable();
+    void qdcmSession();
+    void qualcommHelperCoalesces();
+    void qualcommHelperDisplayOn();
+    void qualcommTransform();
+    void qualcommOverDBus();
+    void qualcommRenderer();
+    void qualcommNotUsable();
+    void qualcommFailure();
+    void qualcommNotInstalled();
+    void outputOrder();
+    void gpuFallback();
     void updateEnv_data();
     void updateEnv();
     void cutoffFirstReadingAppliesImmediately();
@@ -399,12 +573,23 @@ private:
     // A controller for a QQuickView with the display hardware faked; a null
     // hwRelease means no hw-release file
     // ccorr: "bits,engines,linear" for a fake device tree, empty for none
+    // qualcommLog: the Qualcomm helper, faked; without it, not installed
     OwlfishController *createPqController(const QTemporaryDir &dir, PqDisplay::Backend *backend,
                                           const QByteArray &hwRelease = "ID=jp2601\n",
-                                          const QByteArray &ccorr = QByteArray());
+                                          const QByteArray &ccorr = QByteArray(),
+                                          QualcommLog *qualcommLog = nullptr);
+
+    // createPqController() on a device without pq, with the Qualcomm helper
+    // faked
+    OwlfishController *createQualcommController(const QTemporaryDir &dir, PqLog *pqLog, QualcommLog *log);
 
     QTemporaryDir m_cacheDir;
 };
+
+OwlfishController *tst_Owlfish::createQualcommController(const QTemporaryDir &dir, PqLog *pqLog, QualcommLog *log)
+{
+    return createPqController(dir, new FakePq(pqLog, false), "ID=xqbt52\n", QByteArray(), log);
+}
 
 void tst_Owlfish::initTestCase()
 {
@@ -448,7 +633,8 @@ void tst_Owlfish::compare(const QImage &image, const QPoint &pos, const QColor &
 OwlfishController *tst_Owlfish::createPqController(const QTemporaryDir &dir,
                                                    PqDisplay::Backend *backend,
                                                    const QByteArray &hwRelease,
-                                                   const QByteArray &ccorr)
+                                                   const QByteArray &ccorr,
+                                                   QualcommLog *qualcommLog)
 {
     // Never the host's own device tree
     const QString deviceTreePath = dir.filePath(QStringLiteral("devicetree"));
@@ -464,7 +650,9 @@ OwlfishController *tst_Owlfish::createPqController(const QTemporaryDir &dir,
     }
     OwlfishController *controller = new OwlfishController(
             "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts")));
-    controller->setDisplayHardware(backend, hwReleasePath, deviceTreePath);
+    controller->setHardwareOutputs({ new MediaTekOutput(backend, hwReleasePath, deviceTreePath),
+                                     new QualcommOutput(new FakeQualcomm(qualcommLog)) },
+                                   hwReleasePath);
     return controller;
 }
 
@@ -1372,37 +1560,37 @@ void tst_Owlfish::rendererSelection_data()
                                    << QByteArray();
     QTest::newRow("old service") << jollaPhone << QByteArray() << true << 6
                                  << "gpu" << "service version 6, needs 7" << 1
-                                 << QStringLiteral("device jp2601, verified")
+                                 << QStringLiteral("device jp2601")
                                  << QByteArray();
     QTest::newRow("no service") << jollaPhone << QByteArray() << false << 7
                                 << "gpu" << "display hardware not available: no service" << 1
-                                << QStringLiteral("device jp2601, verified")
+                                << QStringLiteral("device jp2601")
                                 << QByteArray();
     // Nothing is loaded or called
     QTest::newRow("other device") << other << QByteArray() << true << 7
-                                  << "gpu" << "renderer %gpu (device xqbt52 not verified" << 0
+                                  << "gpu" << "renderer %gpu (no display hardware" << 0
                                   << QString()
                                   << QByteArray();
     QTest::newRow("no hw-release") << QByteArray() << QByteArray() << true << 7
-                                   << "gpu" << "renderer %gpu (device unknown" << 0
+                                   << "gpu" << "renderer %gpu (no display hardware" << 0
                                    << QString()
                                    << QByteArray();
     QTest::newRow("forced blend") << jollaPhone << QByteArray("blend") << true << 7
                                   << "blend" << "renderer blend (forced by the renderer key)" << 0
-                                  << QStringLiteral("device jp2601, verified")
+                                  << QStringLiteral("device jp2601")
                                   << QByteArray();
     QTest::newRow("forced pq") << other << QByteArray("PQ") << true << 7
                                << "pq" << "renderer pq (forced by the renderer key)" << 1
-                               << QStringLiteral("device xqbt52, not verified")
+                               << QStringLiteral("device xqbt52")
                                << QByteArray();
     // Still only with a service that is new enough
     QTest::newRow("forced pq, old service") << other << QByteArray("pq") << true << 6
                                             << "gpu" << "service version 6" << 1
-                                            << QStringLiteral("device xqbt52, not verified")
+                                            << QStringLiteral("device xqbt52")
                                             << QByteArray();
     QTest::newRow("forced pq, no service") << other << QByteArray("pq") << false << 7
                                            << "gpu" << "not available: no service" << 1
-                                           << QStringLiteral("device xqbt52, not verified")
+                                           << QStringLiteral("device xqbt52")
                                            << QByteArray();
     QTest::newRow("unknown key") << jollaPhone << QByteArray("gpu") << true << 7
                                  << "pq" << "renderer pq (device jp2601 verified)" << 1
@@ -1412,17 +1600,17 @@ void tst_Owlfish::rendererSelection_data()
     const QByteArray future("ID=jp2701\n");
     QTest::newRow("detected") << future << QByteArray() << true << 7
                               << "pq" << "renderer pq (display hardware detected)" << 1
-                              << QStringLiteral("device jp2701, not verified") << QByteArray("13,1,1");
+                              << QStringLiteral("device jp2701") << QByteArray("13,1,1");
     QTest::newRow("detected, no service") << future << QByteArray() << false << 7
                                           << "gpu" << "display hardware not available: no service" << 1
-                                          << QStringLiteral("device jp2701, not verified")
+                                          << QStringLiteral("device jp2701")
                                           << QByteArray("13,1,1");
     // A layout whose scale isn't known: nothing is loaded or called
     QTest::newRow("12-bit") << future << QByteArray() << true << 7
-                            << "gpu" << "renderer %gpu (device jp2701 not verified" << 0
+                            << "gpu" << "renderer %gpu (no display hardware" << 0
                             << QString() << QByteArray("12,1,1");
     QTest::newRow("two engines") << future << QByteArray() << true << 7
-                                 << "gpu" << "renderer %gpu (device jp2701 not verified" << 0
+                                 << "gpu" << "renderer %gpu (no display hardware" << 0
                                  << QString() << QByteArray("13,2,1");
 }
 
@@ -1467,7 +1655,7 @@ void tst_Owlfish::rendererSelection()
                  qPrintable(controller->diagnostics()));
     }
     const QStringList lines = controller->diagnostics().split(QLatin1Char('\n'));
-    QCOMPARE(lines.filter(QStringLiteral("device ")).size(), 1);
+    QCOMPARE(lines.filter(QRegularExpression(QStringLiteral("^device "))).size(), 1);
     if (!deviceLine.isEmpty())
         QVERIFY2(lines.contains(deviceLine), qPrintable(controller->diagnostics()));
     QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
@@ -1586,7 +1774,7 @@ void tst_Owlfish::saturationThroughFetch()
         QTRY_COMPARE(controller->renderer(), QStringLiteral("blend"));
         const QString diagnostics = controller->diagnostics();
         QVERIFY2(diagnostics.contains(QStringLiteral(
-                         "\nrenderer blend (device xqbt52 not verified, fetch not supported")),
+                         "\nrenderer blend (no display hardware, fetch not supported")),
                  qPrintable(diagnostics));
         QVERIFY(diagnostics.contains(QStringLiteral("\nsaturation 40 %, not supported by this renderer")));
         QSKIP("No framebuffer fetch in this OpenGL implementation; the fallback was checked");
@@ -1599,7 +1787,7 @@ void tst_Owlfish::saturationThroughFetch()
     compare(grab(view.data()), Orange,
             throughGamma2(QColor(255, 128, 64), saturation, QVector3D(0.5f, 0.5f, 0.5f)));
     const QString diagnostics = controller->diagnostics();
-    QVERIFY2(diagnostics.contains(QStringLiteral("\nrenderer fetch (device xqbt52 not verified)\n")),
+    QVERIFY2(diagnostics.contains(QStringLiteral("\nrenderer fetch (no display hardware)\n")),
              qPrintable(diagnostics));
     QVERIFY(diagnostics.contains(QStringLiteral("\nsaturation 40 %\n")));
 }
@@ -1927,7 +2115,7 @@ void tst_Owlfish::rendererPqDrawsNothing()
     compare(image, Orange, QColor(255, 128, 64));
 
     QVERIFY(controller->diagnostics().contains(QStringLiteral("display hardware version 7, ")));
-    QVERIFY(!controller->diagnostics().contains(QStringLiteral("device jp2601, verified")));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ndevice jp2601\n")));
 
     // Leaves the hardware neutral
     const int gains = log.gains.size();
@@ -2018,7 +2206,7 @@ void tst_Owlfish::rendererFallback()
     QVERIFY2(controller->diagnostics().contains(
                      QStringLiteral("renderer %1 (display hardware failed: fake failure").arg(gpu)),
              qPrintable(controller->diagnostics()));
-    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ndevice jp2601, verified\n")));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\ndevice jp2601\n")));
     // The failed step, then the reset of what can still be reset
     QCOMPARE(log.attempts, 6);
 
@@ -2662,6 +2850,576 @@ void tst_Owlfish::pluginIgnoresOtherProcesses()
     QScopedPointer<QObject> plugin(QGenericPluginFactory::create(QStringLiteral("owlfish"), QString()));
     QVERIFY(plugin);
     QVERIFY(!plugin->inherits("OwlfishController"));
+}
+
+void tst_Owlfish::qdcmArguments()
+{
+    // As in the probes that worked on the Xperia 10 III
+    QCOMPARE(Qdcm::initArguments().join(QLatin1Char(' ')),
+             QStringLiteral("call display.qservice 24 i32 0 i32 8 i32 0 i32 0"));
+    QCOMPARE(Qdcm::disableArguments(2).join(QLatin1Char(' ')),
+             QStringLiteral("call display.qservice 24 i32 0 i32 24 i32 103 i32 0 i64 2 i32 0 i32 0"));
+    QCOMPARE(Qdcm::getPccArguments(2).join(QLatin1Char(' ')),
+             QStringLiteral("call display.qservice 24 i32 0 i32 16 i32 102 i64 2 i32 0"));
+    QCOMPARE(Qdcm::deinitArguments(2).join(QLatin1Char(' ')),
+             QStringLiteral("call display.qservice 24 i32 0 i32 16 i32 1 i64 2 i32 0"));
+    const double vibrant[9] = { 1.15748, -0.14304, -0.01444, -0.04252, 1.05696, -0.01444,
+                                -0.04252, -0.14304, 1.18556 };
+    QString expected = QStringLiteral("call display.qservice 24 i32 0 i32 296 i32 103 i32 1 i64 2 i32 0 i32 1 i32 0 i32 0");
+    for (int row = 0; row < 3; ++row) {
+        expected += QStringLiteral(" d 0");
+        for (int column = 0; column < 3; ++column)
+            expected += QStringLiteral(" d ") + QString::number(vibrant[row * 3 + column], 'g', 17);
+        expected += QStringLiteral(" d 0 d 0 d 0 d 0 d 0 d 0 d 0");
+    }
+    const QStringList arguments = Qdcm::setPccArguments(2, vibrant);
+    QCOMPARE(arguments.join(QLatin1Char(' ')), expected);
+    // 3 + 4 i32 + 1 i64 + 4 i32 + 33 doubles, each with its type
+    QCOMPARE(arguments.size(), 3 + 2 * (2 + 3 + 4 + 33));
+    // Whatever the locale
+    QVERIFY(!arguments.join(QLatin1Char(' ')).contains(QLatin1Char(',')));
+}
+
+void tst_Owlfish::qdcmParcel()
+{
+    // Replies from the probes on the Xperia 10 III (W1)
+    quint64 session = 0;
+    QVERIFY(Qdcm::parseInit(Qdcm::parcelWords(
+            "Result: Parcel(00000000 00000008 00000002 00000000 '................')\n"), &session));
+    QCOMPARE(session, quint64(2));
+    QCOMPARE(Qdcm::status(Qdcm::parcelWords("Result: Parcel(00000000 00000000   '........')")), qint64(0));
+    QCOMPARE(Qdcm::status(Qdcm::parcelWords("Result: Parcel(00000007    '....')")), qint64(7));
+    QVERIFY(Qdcm::parcelWords("Result: Parcel(Error: 0xffffffffffffffb5 \"Not a data message\")").isEmpty());
+    QVERIFY(Qdcm::parcelWords("vndservice: service not found").isEmpty());
+    QVERIFY(!Qdcm::parseInit(Qdcm::parcelWords("Result: Parcel(00000007    '....')"), &session));
+
+    const QByteArray vibrant =
+            "Result: Parcel(\n"
+            "  0x00000000: 00000000 00000118 00000001 00000001 '................'\n"
+            "  0x00000010: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x00000020: bf9c62a2 3ff28509 7d028a1e bfc24f22 '.b.....?...}\"O..'\n"
+            "  0x00000030: fe08aefb bf8d92b7 00000000 00000000 '................'\n"
+            "  0x00000040: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x00000050: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x00000060: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x00000070: 00000000 00000000 72da1230 bfa5c52e '........0..r....'\n"
+            "  0x00000080: e392e1ef 3ff0e94e fe08aefb bf8d92b7 '....N..?........'\n"
+            "  0x00000090: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x000000a0: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x000000b0: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x000000c0: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x000000d0: 72da1230 bfa5c52e 7d028a1e bfc24f22 '0..r.......}\"O..'\n"
+            "  0x000000e0: c33721d5 3ff2f80d 00000000 00000000 '.!7....?........'\n"
+            "  0x000000f0: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x00000100: 00000000 00000000 00000000 00000000 '................'\n"
+            "  0x00000110: 00000000 00000000 00000000 00000000 '................')\n";
+    const QVector<quint32> words = Qdcm::parcelWords(vibrant);
+    QCOMPARE(words.size(), 72);
+    double matrix[9];
+    bool enabled = false;
+    QVERIFY(Qdcm::parsePcc(words, matrix, &enabled));
+    QVERIFY(enabled);
+    const double expected[9] = { 1.15748, -0.14304, -0.01444, -0.04252, 1.05696, -0.01444,
+                                 -0.04252, -0.14304, 1.18556 };
+    for (int i = 0; i < 9; ++i)
+        QVERIFY2(std::fabs(matrix[i] - expected[i]) < 1e-12, qPrintable(QString::number(i)));
+
+    // Off, as after a disable
+    QVector<quint32> off = words;
+    off[3] = 0;
+    QVERIFY(Qdcm::parsePcc(off, matrix, &enabled));
+    QVERIFY(!enabled);
+    // Not a stored PCC
+    QVERIFY(!Qdcm::parsePcc(Qdcm::parcelWords("Result: Parcel(00000000 00000008 00000000 00000000 '....')"),
+                            matrix, &enabled));
+}
+
+void tst_Owlfish::qdcmAcceptable()
+{
+    QString why;
+    const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    QVERIFY(Qdcm::isAcceptable(identity, &why));
+    QVERIFY(Qdcm::isIdentity(identity));
+    // Owlfish's darkest: 75 % dimming at 1900 K, greyscale, in linear light
+    const QVector3D gain = ColorTemperature::gain(1900) * 0.25f;
+    const QMatrix3x3 darkest = ColorMatrix::withGain(ColorMatrix::saturation(0), gain);
+    double values[9];
+    for (int i = 0; i < 9; ++i)
+        values[i] = darkest(i / 3, i % 3);
+    QVERIFY2(Qdcm::isAcceptable(values, &why), qPrintable(why));
+    QVERIFY(!Qdcm::isIdentity(values));
+
+    const double black[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    QVERIFY(!Qdcm::isAcceptable(black, &why));
+    QCOMPARE(why, QStringLiteral("white would be black"));
+    double large[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 2.5 };
+    QVERIFY(!Qdcm::isAcceptable(large, &why));
+    large[8] = std::nan("");
+    QVERIFY(!Qdcm::isAcceptable(large, &why));
+}
+
+void tst_Owlfish::qdcmSession()
+{
+    FakeComposer composer;
+    Qdcm::Session session(composer.runner());
+    QString error;
+    // Identity set, read back, turned off
+    QVERIFY2(session.probe(&error), qPrintable(error));
+    QVERIFY(!composer.enabled);
+    QCOMPARE(composer.log.size(), 4);
+
+    const double warm[9] = { 1, 0, 0, 0, 0.85, 0, 0, 0, 0.65 };
+    QVERIFY(session.apply(warm, &error));
+    QVERIFY(composer.enabled);
+    QCOMPARE(composer.matrix[4], 0.85);
+    // The identity turns it off, with the short request
+    const double identity[9] = { 1, 0, 0, 0, 1, 0, 0, 0, 1 };
+    QVERIFY(session.apply(identity, &error));
+    QVERIFY(!composer.enabled);
+    QCOMPARE(composer.log.last().value(6), QStringLiteral("24"));
+
+    // The composer restarted: a new session, then the call again
+    composer.minimumSession = composer.session + 1;
+    QVERIFY2(session.apply(warm, &error), qPrintable(error));
+    QVERIFY(composer.enabled);
+    QCOMPARE(composer.log.at(composer.log.size() - 2).value(8), QStringLiteral("0"));
+
+    // A refusal that a new session doesn't fix
+    composer.failNextSet = 7;
+    QVERIFY(session.apply(identity, &error));
+    composer.failNextSet = 7;
+    const int calls = composer.calls;
+    composer.minimumSession = composer.session + 1;
+    QVERIFY(!session.apply(warm, &error));
+    QVERIFY(composer.calls > calls);
+
+    // A probe that reads back something else
+    FakeComposer broken;
+    Qdcm::Session other([&broken](const QStringList &arguments, QByteArray *output, QString *error) {
+        broken.run(arguments, output, error);
+        if (arguments.value(8) == QLatin1String("102"))
+            *output = "Result: Parcel(00000000 00000008 00000000 00000000 '....')";
+        return true;
+    });
+    QVERIFY(!other.probe(&error));
+    QVERIFY2(error.startsWith(QStringLiteral("read back differs")), qPrintable(error));
+    // Left off anyway
+    QVERIFY(!broken.enabled);
+
+    // No colour manager
+    Qdcm::Session none([](const QStringList &, QByteArray *output, QString *) {
+        *output = "Result: Parcel(ffffffea    '....')";
+        return true;
+    });
+    QVERIFY(!none.probe(&error));
+    QVERIFY2(error.startsWith(QStringLiteral("no colour manager")), qPrintable(error));
+}
+
+void tst_Owlfish::qualcommHelperCoalesces()
+{
+    FakeComposer composer;
+    QualcommHelper helper(composer.runner());
+    QSignalSpy applied(&helper, SIGNAL(Applied()));
+    QSignalSpy failed(&helper, SIGNAL(Failed(QString)));
+    QString info;
+    QVERIFY(helper.Probe(info));
+    QCOMPARE(info, QStringLiteral("QDCM PCC, read back checked"));
+
+    // Three before the event loop runs: only the last is applied
+    const int calls = composer.calls;
+    helper.SetMatrix({ 0.9, 0, 0, 0, 0.9, 0, 0, 0, 0.9 });
+    helper.SetMatrix({ 0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8 });
+    helper.SetMatrix({ 0.7, 0, 0, 0, 0.7, 0, 0, 0, 0.7 });
+    QTRY_COMPARE(applied.count(), 1);
+    QCOMPARE(composer.calls, calls + 1);
+    QCOMPARE(composer.matrix[0], 0.7);
+
+    // Refused, and nothing sent
+    helper.SetMatrix({ 0, 0, 0, 0, 0, 0, 0, 0, 0 });
+    QTRY_COMPARE(failed.count(), 1);
+    QCOMPARE(composer.calls, calls + 1);
+    helper.SetMatrix({ 1, 0 });
+    QTRY_COMPARE(failed.count(), 2);
+
+    helper.Reset();
+    QTRY_COMPARE(applied.count(), 2);
+    QVERIFY(!composer.enabled);
+}
+
+void tst_Owlfish::qualcommHelperDisplayOn()
+{
+    FakeComposer composer;
+    QualcommHelper helper(composer.runner());
+    QSignalSpy applied(&helper, SIGNAL(Applied()));
+    QString info;
+    QVERIFY(helper.Probe(info));
+    helper.SetMatrix({ 1, 0, 0, 0, 0.85, 0, 0, 0, 0.65 });
+    QTRY_COMPARE(applied.count(), 1);
+
+    // Off, then on: sent again, and lipstick told to draw
+    const int calls = composer.calls;
+    QMetaObject::invokeMethod(&helper, "displayStatusChanged", Q_ARG(QString, QStringLiteral("off")));
+    QTest::qWait(20);
+    QCOMPARE(composer.calls, calls);
+    QMetaObject::invokeMethod(&helper, "displayStatusChanged", Q_ARG(QString, QStringLiteral("on")));
+    QTRY_COMPARE(applied.count(), 2);
+    QCOMPARE(composer.calls, calls + 1);
+    // Dimmed to on: the display stayed on
+    QMetaObject::invokeMethod(&helper, "displayStatusChanged", Q_ARG(QString, QStringLiteral("dimmed")));
+    QMetaObject::invokeMethod(&helper, "displayStatusChanged", Q_ARG(QString, QStringLiteral("on")));
+    QTest::qWait(20);
+    QCOMPARE(composer.calls, calls + 1);
+
+    // Nothing to restore while off
+    helper.Reset();
+    QTRY_COMPARE(applied.count(), 3);
+    QMetaObject::invokeMethod(&helper, "displayStatusChanged", Q_ARG(QString, QStringLiteral("off")));
+    QMetaObject::invokeMethod(&helper, "displayStatusChanged", Q_ARG(QString, QStringLiteral("on")));
+    QTest::qWait(20);
+    QCOMPARE(applied.count(), 3);
+}
+
+void tst_Owlfish::qualcommOverDBus()
+{
+    // The plugin's calls through the bus to the helper, on the session bus
+    // and two connections
+    if (!QDBusConnection::sessionBus().isConnected())
+        QSKIP("No session bus");
+    qDBusRegisterMetaType<QList<double>>();
+    QDBusConnection helperBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
+                                                             QStringLiteral("owlfish-test-helper"));
+    FakeComposer composer;
+    {
+        QDBusConnection pluginBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
+                                                                 QStringLiteral("owlfish-test-plugin"));
+        QDBusConnection::disconnectFromBus(QStringLiteral("owlfish-test-plugin"));
+        QScopedPointer<QualcommHelper> helper(new QualcommHelper(composer.runner()));
+        if (!helper->registerOn(helperBus))
+            QSKIP("Cannot register the helper on the session bus");
+
+        // Not lipstick, so refused
+        QualcommClient refused(QualcommClient::createDBusBackend(pluginBus));
+        QSignalSpy refusedChecked(&refused, SIGNAL(checked()));
+        refused.check();
+        QTRY_COMPARE(refusedChecked.count(), 1);
+        QCOMPARE(refused.state(), QualcommClient::Unavailable);
+        QVERIFY2(refused.info().contains(QStringLiteral("home screen")), qPrintable(refused.info()));
+        QCOMPARE(composer.calls, 0);
+        helperBus.unregisterService(QLatin1String(QualcommHelper::ServiceName));
+        helperBus.unregisterObject(QLatin1String(QualcommHelper::ObjectPath));
+    }
+
+    QScopedPointer<QualcommHelper> helper(new QualcommHelper(composer.runner()));
+    helper->allowUid(getuid());
+    QVERIFY(helper->registerOn(helperBus));
+    {
+        // Closed when the last copy goes
+        QDBusConnection pluginBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
+                                                                 QStringLiteral("owlfish-test-plugin"));
+        QDBusConnection::disconnectFromBus(QStringLiteral("owlfish-test-plugin"));
+        QualcommClient display(QualcommClient::createDBusBackend(pluginBus));
+        QSignalSpy checked(&display, SIGNAL(checked()));
+        QSignalSpy applied(&display, SIGNAL(applied()));
+        display.check();
+        QTRY_COMPARE(checked.count(), 1);
+        QCOMPARE(display.state(), QualcommClient::Ready);
+        QCOMPARE(display.info(), QStringLiteral("QDCM PCC, read back checked"));
+
+        QMatrix3x3 warm;
+        warm(1, 1) = 0.85f;
+        warm(2, 2) = 0.65f;
+        warm(0, 1) = -0.125f;
+        QVERIFY(display.setMatrix(warm));
+        QTRY_COMPARE(applied.count(), 1);
+        QVERIFY(composer.enabled);
+        QCOMPARE(composer.matrix[1], -0.125);
+        QCOMPARE(composer.matrix[4], 0.85);
+        QCOMPARE(composer.matrix[8], 0.65);
+
+        display.reset();
+        QTRY_COMPARE(applied.count(), 2);
+        QVERIFY(!composer.enabled);
+
+        // The owner goes away with a matrix set: turned off
+        QVERIFY(display.setMatrix(warm));
+        QTRY_COMPARE(applied.count(), 3);
+        QVERIFY(composer.enabled);
+    }
+    QTRY_VERIFY(!composer.enabled);
+    helper.reset();
+    QDBusConnection::disconnectFromBus(QStringLiteral("owlfish-test-helper"));
+}
+
+void tst_Owlfish::qualcommTransform()
+{
+    const QMatrix3x3 grey = ColorMatrix::saturation(0);
+    const QVector3D gain(1, 0.85f, 0.65f);
+    // The rows scaled by the encoded gain, as the GPU applies it
+    const QMatrix3x3 encoded = QualcommOutput::transform(grey, gain);
+    for (int row = 0; row < 3; ++row) {
+        for (int column = 0; column < 3; ++column)
+            QVERIFY(qFuzzyCompare(encoded(row, column), gain[row] * grey(row, column)));
+    }
+}
+
+void tst_Owlfish::qualcommRenderer()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog pqLog;
+    QualcommLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createQualcommController(dir, &pqLog, &log));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+
+    // The GPU while the helper checks
+    QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+    const QString gpu = gpuRenderer(controller->filterItem());
+    QTRY_COMPARE(controller->renderer(), gpu);
+    QCOMPARE(log.probes, 1);
+    QVERIFY2(controller->diagnostics().contains(QStringLiteral("(checking the Qualcomm helper")),
+             qPrintable(controller->diagnostics()));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nqualcomm helper checking, 0 calls\n")));
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    QVERIFY(log.matrices.isEmpty());
+    // Nothing MediaTek's is called
+    QCOMPARE(pqLog.connects, 0);
+
+    log.answer(true, QStringLiteral("QDCM PCC, read back checked"));
+    QCOMPARE(controller->renderer(), QStringLiteral("qualcomm"));
+    QVERIFY(!controller->filterItem()->isVisible());
+    QCOMPARE(log.matrices.last(), qualcommValues(QualcommOutput::transform(QMatrix3x3(), QVector3D(0.5f, 0.5f, 0.5f))));
+    QCOMPARE(log.matrices.last().value(0), 0.5);
+    QVERIFY2(controller->diagnostics().contains(QStringLiteral("renderer qualcomm (Qualcomm helper ready)")),
+             qPrintable(controller->diagnostics()));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("qualcomm helper ready, QDCM PCC, read back checked")));
+    QTRY_COMPARE(grab(view.data()).pixelColor(White), QColor(Qt::white));
+    // Checked once
+    controller->settings()->setRenderer(QString());
+    QCOMPARE(log.probes, 1);
+
+    // The matrix features work through it
+    controller->settings()->setSaturation(0);
+    QTRY_COMPARE(log.matrices.last(), qualcommValues(QualcommOutput::transform(ColorMatrix::saturation(0),
+                                                                             QVector3D(0.5f, 0.5f, 0.5f))));
+    // A repeat isn't sent
+    const int sent = log.matrices.size();
+    controller->settings()->setRenderer(QStringLiteral("auto"));
+    QCOMPARE(log.matrices.size(), sent);
+
+    // To the GPU and back
+    controller->settings()->setRenderer(QStringLiteral("blend"));
+    QCOMPARE(controller->renderer(), QStringLiteral("blend"));
+    QCOMPARE(log.resets, 1);
+    QVERIFY(controller->filterItem()->isVisible());
+    // Forced by its own name; pq would force MediaTek's
+    controller->settings()->setRenderer(QStringLiteral("qualcomm"));
+    QCOMPARE(controller->renderer(), QStringLiteral("qualcomm"));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("renderer qualcomm (forced by the renderer key)")));
+    QCOMPARE(log.matrices.size(), sent + 1);
+    QCOMPARE(pqLog.connects, 0);
+
+    controller.reset();
+    QCOMPARE(log.resets, 2);
+}
+
+void tst_Owlfish::qualcommNotUsable()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog pqLog;
+    QualcommLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createQualcommController(dir, &pqLog, &log));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(log.probes, 1);
+
+    log.answer(false, QStringLiteral("no colour manager (init status -22)"));
+    QTRY_VERIFY(controller->filterItem()->capabilities().detected);
+    QCOMPARE(controller->renderer(), gpuRenderer(controller->filterItem()));
+    QVERIFY(controller->filterItem()->isVisible());
+    QVERIFY2(controller->diagnostics().contains(
+                     QStringLiteral("(Qualcomm helper not usable: no colour manager (init status -22)")),
+             qPrintable(controller->diagnostics()));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nqualcomm helper not usable, no colour manager")));
+    QTRY_COMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    QVERIFY(log.matrices.isEmpty());
+    controller.reset();
+    QCOMPARE(log.resets, 0);
+    QCOMPARE(log.probes, 1);
+}
+
+void tst_Owlfish::qualcommFailure()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog pqLog;
+    QualcommLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createQualcommController(dir, &pqLog, &log));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(log.probes, 1);
+    QTRY_VERIFY(controller->filterItem()->capabilities().detected);
+    log.answer(true, QStringLiteral("QDCM PCC, read back checked"));
+    QCOMPARE(controller->renderer(), QStringLiteral("qualcomm"));
+    // A frame for each applied matrix: harmless here
+    log.backend->applied();
+
+    // A call failed in the helper: the GPU for the rest of the run, and the
+    // hardware turned off as far as it still can be
+    log.backend->failed(QStringLiteral("set status 7"));
+    const QString gpu = gpuRenderer(controller->filterItem());
+    QCOMPARE(controller->renderer(), gpu);
+    QVERIFY(controller->filterItem()->isVisible());
+    QVERIFY2(controller->diagnostics().contains(
+                     QStringLiteral("renderer %1 (display hardware failed: set status 7").arg(gpu)),
+             qPrintable(controller->diagnostics()));
+    QCOMPARE(log.resets, 1);
+    const QVector3D gain = ColorTemperature::gain(2700) * 0.5f;
+    QTRY_VERIFY(qFuzzyCompare(controller->filterItem()->gain(), gain));
+    compare(grab(view.data()), White, QColor(qRound(255 * gain.x()), qRound(255 * gain.y()),
+                                             qRound(255 * gain.z())));
+
+    const int sent = log.matrices.size();
+    controller->settings()->setRenderer(QStringLiteral("pq"));
+    QCOMPARE(controller->renderer(), gpu);
+    log.backend->applied();
+    // A second failure signal changes nothing
+    log.backend->failed(QStringLiteral("again"));
+    QCOMPARE(log.probes, 1);
+    QCOMPARE(log.matrices.size(), sent);
+    controller.reset();
+    QCOMPARE(log.resets, 1);
+}
+
+void tst_Owlfish::outputOrder()
+{
+    // MediaTek's hardware first: the helper isn't even asked
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog pqLog;
+    QualcommLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(
+            createPqController(dir, new FakePq(&pqLog), "ID=jp2601\n", QByteArray(), &log));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+    QTRY_COMPARE(pqLog.matrices.value(pqLog.matrices.size() - 1), pqMatrixFor(QVector3D(0.5f, 0.5f, 0.5f)));
+    QCOMPARE(log.probes, 0);
+    QVERIFY(log.matrices.isEmpty());
+    // The GPU's item has the filter too, hidden
+    QVERIFY(!controller->filterItem()->isVisible());
+    QCOMPARE(controller->filterItem()->gain(), QVector3D(0.5f, 0.5f, 0.5f));
+    controller.reset();
+    QCOMPARE(log.resets, 0);
+}
+
+void tst_Owlfish::gpuFallback()
+{
+    // Whenever no display hardware works, the GPU draws the whole filter
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "2700");
+    qputenv("OWLFISH_DIM", "50");
+    const QVector3D gain = ColorTemperature::gain(2700) * 0.5f;
+    const QColor tinted(qRound(255 * gain.x()), qRound(255 * gain.y()), qRound(255 * gain.z()));
+    const QByteArray mediatek("13,1,1");
+
+    {
+        // MediaTek's hardware detected, but its reset at start fails
+        PqLog pqLog;
+        pqLog.failFrom = 0;
+        QualcommLog log;
+        QTemporaryDir dir;
+        QScopedPointer<OwlfishController> controller(
+                createPqController(dir, new FakePq(&pqLog), "ID=jp2701\n", mediatek, &log));
+        QScopedPointer<QQuickView> view(createView());
+        QVERIFY(view);
+        QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+        const QString gpu = gpuRenderer(controller->filterItem());
+        QTRY_COMPARE(controller->renderer(), gpu);
+        QVERIFY2(controller->diagnostics().contains(
+                         QStringLiteral("renderer %1 (display hardware failed: fake failure").arg(gpu)),
+                 qPrintable(controller->diagnostics()));
+        QVERIFY(controller->filterItem()->isVisible());
+        QTRY_VERIFY(qFuzzyCompare(controller->filterItem()->gain(), gain));
+        compare(grab(view.data()), White, tinted);
+        // Not tried again, and the other hardware isn't asked either
+        const int attempts = pqLog.attempts;
+        controller->settings()->setRenderer(QStringLiteral("auto"));
+        QCOMPARE(pqLog.attempts, attempts);
+        QCOMPARE(log.probes, 0);
+    }
+    {
+        // MediaTek's detected but without its service: the next kind is tried
+        PqLog pqLog;
+        QualcommLog log;
+        QTemporaryDir dir;
+        QScopedPointer<OwlfishController> controller(
+                createPqController(dir, new FakePq(&pqLog, false), "ID=jp2701\n", mediatek, &log));
+        QScopedPointer<QQuickView> view(createView());
+        QVERIFY(view);
+        QTRY_COMPARE(log.probes, 1);
+        QCOMPARE(pqLog.connects, 1);
+        log.answer(true, QStringLiteral("QDCM PCC, read back checked"));
+        QCOMPARE(controller->renderer(), QStringLiteral("qualcomm"));
+    }
+    {
+        // Both kinds there, neither works: the GPU, with the last reason
+        PqLog pqLog;
+        QualcommLog log;
+        QTemporaryDir dir;
+        QScopedPointer<OwlfishController> controller(
+                createPqController(dir, new FakePq(&pqLog, false), "ID=jp2701\n", mediatek, &log));
+        QScopedPointer<QQuickView> view(createView());
+        QVERIFY(view);
+        QTRY_COMPARE(log.probes, 1);
+        log.answer(false, QStringLiteral("no colour manager (init status -22)"));
+        QTRY_VERIFY(controller->filterItem()->capabilities().detected);
+        const QString gpu = gpuRenderer(controller->filterItem());
+        QTRY_COMPARE(controller->renderer(), gpu);
+        QVERIFY2(controller->diagnostics().contains(
+                         QStringLiteral("renderer %1 (Qualcomm helper not usable: no colour manager").arg(gpu)),
+                 qPrintable(controller->diagnostics()));
+        QVERIFY(controller->filterItem()->isVisible());
+        QTRY_VERIFY(qFuzzyCompare(controller->filterItem()->gain(), gain));
+        compare(grab(view.data()), White, tinted);
+        QCOMPARE(pqLog.attempts, 0);
+        QVERIFY(log.matrices.isEmpty());
+        controller.reset();
+        QCOMPARE(log.resets, 0);
+    }
+}
+
+void tst_Owlfish::qualcommNotInstalled()
+{
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "6500");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog pqLog;
+    QualcommLog log;
+    log.installed = false;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createQualcommController(dir, &pqLog, &log));
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_VERIFY(controller->filterItem() && controller->filterItem()->capabilities().detected);
+    QTRY_COMPARE(controller->renderer(), gpuRenderer(controller->filterItem()));
+    // As in 1.4: nothing checked, nothing called
+    QVERIFY2(controller->diagnostics().contains(QStringLiteral("(no display hardware")),
+             qPrintable(controller->diagnostics()));
+    QVERIFY(!controller->diagnostics().contains(QStringLiteral("qualcomm helper")));
+    QCOMPARE(log.probes, 0);
+    QCOMPARE(pqLog.connects, 0);
+    controller.reset();
+    QCOMPARE(log.resets, 0);
 }
 
 QTEST_MAIN(tst_Owlfish)

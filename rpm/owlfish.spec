@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-only
 
 Name:       owlfish
-Version:    1.4.0
+Version:    1.5.0~alpha2
 Release:    1
 Summary:    Warm tint and extra dimming for the display
 License:    LGPL-2.1-only
@@ -44,6 +44,18 @@ Links:
   Bugtracker: https://github.com/ccontino84/owlfish/issues
 %endif
 
+%package qualcomm
+Summary:    Owlfish in the display hardware of Qualcomm devices such as the Xperias
+Requires:   %{name} = %{version}-%{release}
+
+%description qualcomm
+Lets Owlfish apply its filter in the display hardware (Qualcomm's display
+colour manager) instead of drawing it on the graphics processor: a small
+system service, running as the graphics user, that only accepts calls from
+the home screen. Owlfish checks the hardware at every start and uses the
+graphics processor if the check fails. Not needed on the Jolla Phone; the
+devices it was tried on are listed in README.md.
+
 %prep
 %autosetup -n %{name}-%{version}
 
@@ -69,6 +81,24 @@ if [ $1 -eq 0 ]; then
     echo "owlfish: restart the home screen to unload it: systemctl --user restart lipstick"
 fi
 
+%post qualcomm
+systemctl daemon-reload >/dev/null 2>&1 || :
+# A helper from an older version starts again when lipstick asks for it
+systemctl try-restart owlfish-qualcomm.service >/dev/null 2>&1 || :
+echo "owlfish-qualcomm: restart the home screen to use it: systemctl --user restart lipstick"
+exit 0
+
+%preun qualcomm
+# Stopping the helper turns the display hardware's matrix off
+if [ $1 -eq 0 ]; then
+    systemctl stop owlfish-qualcomm.service >/dev/null 2>&1 || :
+fi
+exit 0
+
+%postun qualcomm
+systemctl daemon-reload >/dev/null 2>&1 || :
+exit 0
+
 %files
 %license LICENSE
 %{_libdir}/qt5/plugins/generic/libowlfish.so
@@ -78,3 +108,10 @@ fi
 %{_datadir}/jolla-settings/entries/owlfish.json
 %{_datadir}/jolla-settings/pages/owlfish
 %{_datadir}/themes/sailfish-default/silica/*/icons-monochrome/icon-m-owlfish.png
+
+%files qualcomm
+%license LICENSE
+%attr(755,root,root) /usr/libexec/owlfish/qualcomm-helper
+/usr/lib/systemd/system/owlfish-qualcomm.service
+%{_datadir}/dbus-1/system-services/io.github.ccontino84.owlfish.Qualcomm.service
+%config %{_sysconfdir}/dbus-1/system.d/io.github.ccontino84.owlfish.Qualcomm.conf

@@ -31,4 +31,4 @@ var values = {
 // Also unset by the reset: the troubleshooting key, and keys that only
 // pre-releases used. Not the keys the plugin writes (als_*, sun_*, auto_*).
 var hiddenKeys = ["renderer", "debug_renderer", "debug_matrix", "debug_transfer",
-                  "profile", "filter", "preset"]
+                  "profile", "filter", "preset", "xperia_light"]

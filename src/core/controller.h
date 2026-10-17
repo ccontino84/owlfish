@@ -4,14 +4,14 @@
 #ifndef OWLFISH_CONTROLLER_H
 #define OWLFISH_CONTROLLER_H
 
-#include "colorfilteritem.h"
 #include "crashguard.h"
-#include "pqdisplay.h"
+#include "gpuoutput.h"
 #include "schedule.h"
 #include "sun.h"
 #include "timezonelocation.h"
 
 #include <QGenericMatrix>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QScopedPointer>
@@ -24,17 +24,18 @@ class QLightSensor;
 class AmbientCutoff;
 class OwlfishSettings;
 
-// Runs inside the compositor process: waits for the compositor's QQuickWindow,
-// puts a ColorFilterItem on top of its scene and drives it from the settings.
-// The schedule only affects the colour, the ambient light cut-off only the
-// dimming. With a sunset to sunrise schedule it also publishes today's sun
-// times for the settings page.
+// Runs inside the compositor process: waits for the compositor's QQuickWindow
+// and drives the filter from the settings. The schedule only affects the
+// colour, the ambient light cut-off only the dimming. With a sunset to
+// sunrise schedule it also publishes today's sun times for the settings page.
 //
-// On verified devices the display hardware applies the filter instead
-// (PqDisplay): the item then only holds the gain and is hidden. The hardware
-// keeps its matrix after the compositor is gone, so it is reset on quit, and
-// the whole state is sent again at every start. If a call fails, the item
-// takes over until the next start.
+// The filter (a gain and a matrix) is faded here and applied by one output
+// (FilterOutput): the first display hardware output that applies to the
+// device and works, the GPU otherwise (GpuOutput). The GPU always gets the
+// filter too, hidden while the hardware applies it, so it can take over at
+// once. If a hardware call fails, the GPU takes over until the next start.
+// The hardware is left neutral on quit, and the whole state is sent again
+// at every start. Only the constructor knows which kinds of hardware exist.
 class OwlfishController : public QObject
 {
     Q_OBJECT
@@ -46,10 +47,10 @@ public:
     // Leaves the display hardware at identity
     ~OwlfishController() override;
 
-    // For tests: the display hardware's service and the file the device is
-    // identified by. Before the window is found; takes ownership.
-    void setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath,
-                            const QString &deviceTreePath = QLatin1String(PqDisplay::DeviceTreePath));
+    // For tests: the display hardware outputs, in the order they are tried,
+    // and the file the device is identified by. Before the window is found;
+    // takes ownership.
+    void setHardwareOutputs(const QList<FilterOutput *> &outputs, const QString &hwReleasePath);
 
     bool isActive() const { return m_active; }
     // For the settings page: "active", "starting" (still looking for the
@@ -57,14 +58,15 @@ public:
     QString status() const;
     // Lets the plugin try again at the next compositor start
     void resetCrashGuard();
-    // "pq" when the display hardware applies the filter, "fetch" or "blend"
-    // when the item draws it (the GPU path chosen; fetch draws only while
-    // the saturation is below 100 %), "none" before the window is found
+    // The active output's name: "pq" or "qualcomm" (display hardware),
+    // "fetch" or "blend" (the GPU; fetch draws only while the matrix isn't
+    // the identity); "none" before the window is found
     QString renderer() const;
     // For support, several lines: version, status, the renderer and why it
     // was chosen
     QString diagnostics() const;
-    ColorFilterItem *filterItem() const { return m_item; }
+    // The GPU's item; it always has the filter, also while hidden
+    ColorFilterItem *filterItem() const { return m_gpu ? m_gpu->item() : nullptr; }
     AmbientCutoff *cutoff() const { return m_cutoff; }
     OwlfishSettings *settings() const { return m_settings; }
 
@@ -79,19 +81,22 @@ public:
 
 private slots:
     void findWindow();
-    void updateItemGeometry();
     void applySettings();
     void cutoffChanged(bool bright);
     void animate(const QVariant &progress);
     void scheduleTick();
     void displayStatusChanged(const QString &status);
-    // The item found out whether Fetch works
-    void rendererChanged();
-    void stopPq();
+    // The display hardware back to neutral
+    void stopHardware();
+    // An output's check was answered: a better one, or the matrix, may
+    // apply now
+    void outputChecked();
+    // The display shows the change with the next frame
+    void outputApplied();
+    void outputFailed();
 
 private:
-    // The display hardware, or the GPU with Fetch working, can apply the
-    // correction and the saturation
+    // The active output can apply the correction and the saturation
     bool matrixSupported() const;
     // The correction, then Night light's saturation, where they can be
     // applied; the identity otherwise
@@ -103,10 +108,9 @@ private:
     // The most the light sensor can report, for the cut-off and the page
     void querySensorMaximum();
     void updateRenderer();
-    // The item's gain, to the display hardware
-    void pushPq();
-    // A call failed: the item takes over until the next start
-    void pqFailed();
+    void connectOutput(FilterOutput *output);
+    // The filter to the GPU and to the active output
+    void pushFilter();
     // The colour's window, with its transitions or another length of them
     OwlfishSchedule schedule() const;
     OwlfishSchedule schedule(int transitionMinutes) const;
@@ -135,8 +139,10 @@ private:
     QTimer m_scheduleTimer;
     bool m_displayOn;
     QPointer<QQuickWindow> m_window;
-    QPointer<ColorFilterItem> m_item;
     QVariantAnimation m_animation;
+    // The filter: the gain, encoded as the colour temperature and the
+    // dimming give it
+    QVector3D m_gain;
     QVector3D m_fromGain;
     QVector3D m_toGain;
     // The correction and the saturation, faded like the gain; applied by the
@@ -144,21 +150,18 @@ private:
     QMatrix3x3 m_matrix;
     QMatrix3x3 m_fromMatrix;
     QMatrix3x3 m_toMatrix;
-    QScopedPointer<PqDisplay> m_pq;
+    // For the device line of the diagnostics
     QString m_hwReleasePath;
-    QString m_deviceTreePath;
-    // Read once, at the first renderer choice
-    bool m_ccorrRead;
-    PqDisplay::Ccorr m_ccorr;
-    // The display hardware applies the filter instead of the item
-    bool m_pqActive;
-    // A call failed in this run
-    bool m_pqFailed;
+    // The display hardware, in the order it is tried; children
+    QList<FilterOutput *> m_hardware;
+    // The fallback, from the window on
+    QScopedPointer<GpuOutput> m_gpu;
+    // The one applying the filter; null before the window is found
+    FilterOutput *m_output;
+    // Why a display hardware call failed in this run; the GPU until the
+    // next start
+    QString m_failure;
     QString m_rendererReason;
-    // The reason says which device this is, so diagnostics() leaves that
-    // line out
-    bool m_reasonNamesDevice;
-    bool m_capabilitiesLogged;
     // The time zone's city, looked up again when the zone changes
     TimeZoneLocation m_zoneLocation;
     // Today's sun times, for the date, zone and location they were

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-only
 
 TEMPLATE = subdirs
-SUBDIRS = src
+SUBDIRS = src qualcomm-helper
 
 # Host-side tests; the RPM build passes CONFIG+=notests
 !notests {
@@ -36,6 +36,7 @@ for(scale, $$list(z1.0 z1.25 z1.5 z1.5-large z1.75 z2.0 z2.5)) {
 
 OTHER_FILES += \
     rpm/owlfish.spec \
+    qualcomm-helper/system/* \
     config/update-env \
     settings/*.json \
     settings/*.qml \

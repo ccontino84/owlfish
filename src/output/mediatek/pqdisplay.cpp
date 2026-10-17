@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 
 #include "pqdisplay.h"
+#include "deviceinfo.h"
 #include "logging.h"
 
 #include <QElapsedTimer>
@@ -304,20 +305,7 @@ QString PqDisplay::describe(const Ccorr &ccorr)
 
 QString PqDisplay::deviceId(const QString &hwReleasePath)
 {
-    QFile file(hwReleasePath);
-    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
-        return QString();
-    for (const QByteArray &line : file.readAll().split('\n')) {
-        const QByteArray trimmed = line.trimmed();
-        if (!trimmed.startsWith("ID="))
-            continue;
-        QByteArray value = trimmed.mid(3);
-        if (value.size() >= 2 && (value.startsWith('"') || value.startsWith('\''))
-                && value.endsWith(value.at(0)))
-            value = value.mid(1, value.size() - 2);
-        return QString::fromUtf8(value);
-    }
-    return QString();
+    return DeviceInfo::id(hwReleasePath);
 }
 
 bool PqDisplay::isVerified(const QString &deviceId)

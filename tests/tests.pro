@@ -8,7 +8,11 @@ QT += testlib gui quick
 
 include(../src/owlfish.pri)
 
-SOURCES += tst_owlfish.cpp
+# The Qualcomm helper's protocol and service, without its main()
+INCLUDEPATH += ../qualcomm-helper
+HEADERS += ../qualcomm-helper/helper.h ../qualcomm-helper/qdcm.h
+
+SOURCES += tst_owlfish.cpp ../qualcomm-helper/helper.cpp ../qualcomm-helper/qdcm.cpp
 
 DEFINES += OWLFISH_PLUGINS_DIR=\\\"$$OUT_PWD/../plugins\\\"
 DEFINES += OWLFISH_UPDATE_ENV=\\\"$$PWD/../config/update-env\\\"

@@ -21,14 +21,26 @@ wash out dark areas the way an overlay app does.
 
 ## Tested on
 
-| Device | Sailfish OS |
-|---|---|
-| Jolla Phone (2026) | 5.2 |
-| Sony Xperia 10 III | 5.1 |
+| Device | Sailfish OS | Display hardware |
+|---|---|---|
+| Jolla Phone (2026) | 5.2 | built in |
+| Sony Xperia 10 III | 5.1 | with `owlfish-qualcomm` |
 
 On the Jolla Phone the display hardware applies the filter, so animations
 stay as smooth as without it, and screenshots don't show the tint. Other
 devices draw it with the graphics processor, and screenshots include it.
+
+**Xperia devices** can use the display hardware too, with the separate
+`owlfish-qualcomm` package from the same release. It adds a small system
+service that sets the display's colour matrix for Owlfish, through
+Qualcomm's display colour manager. It runs as the `graphics` user, because
+the display's colour service only accepts system users, and only accepts
+calls from the home screen. So far it has only been tried on the Xperia
+10 III; other Xperias and other devices with Qualcomm's display colour
+manager may work, and reports are welcome. Owlfish checks the hardware at
+every start and uses the graphics processor if the check fails. To use the
+graphics processor anyway: `dconf write /apps/owlfish/renderer "'fetch'"`,
+or uninstall `owlfish-qualcomm`.
 
 Other devices with Sailfish OS 5.x are likely to work, but have not been
 tried yet. Reports are welcome in the
@@ -42,10 +54,11 @@ reviewed and tested on real devices by the author.
 1. Download the RPM for your device from the
    [latest release](https://github.com/ccontino84/owlfish/releases/latest):
    `aarch64` for most current devices (Jolla Phone, Xperia 10 II/III/IV and
-   later), `armv7hl` for 32-bit installations.
+   later), `armv7hl` for 32-bit installations. On an Xperia, also download
+   `owlfish-qualcomm` (optional, see [Tested on](#tested-on)).
 2. In **Settings > Untrusted software**, turn on *Allow untrusted software*.
 3. Open the downloaded file (from the browser's downloads or the Files app)
-   and install it.
+   and install it; `owlfish-qualcomm` after `owlfish`.
 4. **Restart the phone.** The home screen only loads Owlfish when it starts.
 5. Open **Settings > Owlfish** (under Look and feel) and switch it on. To add
    the top menu shortcut, go to Settings > Top menu and turn on "Owlfish"
@@ -148,7 +161,8 @@ settings page, tap **Copy** and paste the text into your report.
 
 **The screen stays tinted or dim although Owlfish is off or uninstalled**
 (Jolla Phone). The display hardware keeps the filter if the home screen
-crashes. Restart the phone to clear it.
+crashes. Restart the phone to clear it. With `owlfish-qualcomm`, its
+service clears it itself; a restart also does.
 
 **Touch, mouse or keyboard stop working after installing or a system
 update.** Unlikely, as the installer checks for the conflict above: only an
@@ -175,7 +189,7 @@ same file.
 Owlfish has no app icon, so it is removed from a terminal (Developer mode):
 
 ```sh
-devel-su pkcon remove owlfish
+devel-su pkcon remove owlfish-qualcomm owlfish   # owlfish-qualcomm only if installed
 systemctl --user restart lipstick
 ```
 

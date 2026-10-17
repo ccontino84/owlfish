@@ -33,7 +33,7 @@ public slots:
     // until the next restart after an upgrade
     QString version() const;
     void resetCrashGuard();
-    // OwlfishController::renderer(): "pq", "blend" or "none"
+    // OwlfishController::renderer(): "pq", "qualcomm", "fetch", "blend" or "none"
     QString renderer() const;
     // OwlfishController::diagnostics(), for support
     QString diagnostics() const;

@@ -8,7 +8,10 @@
 #include "correction.h"
 #include "settings.h"
 #include "colortemperature.h"
+#include "deviceinfo.h"
 #include "logging.h"
+#include "mediatekoutput.h"
+#include "qualcommoutput.h"
 #include <owlfish_version.h>
 
 #include <QDBusConnection>
@@ -41,8 +44,6 @@ const int CutoffFadeMs = 1000;
 // moves the colour transitions one step
 const int ScheduleIntervalMs = 30000;
 const int ScheduleStepFadeMs = 1000;
-// Above everything the compositor QML puts in the window
-const qreal FilterZ = 1e9;
 
 // os-release's PRETTY_NAME, e.g. "Sailfish OS 5.2.0.17 (Tampella)", for the
 // diagnostics
@@ -80,14 +81,9 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     , m_luxQuery(0)
     , m_findAttempts(0)
     , m_displayOn(true)
-    , m_pq(new PqDisplay)
-    , m_hwReleasePath(QLatin1String(PqDisplay::HwReleasePath))
-    , m_deviceTreePath(QLatin1String(PqDisplay::DeviceTreePath))
-    , m_ccorrRead(false)
-    , m_pqActive(false)
-    , m_pqFailed(false)
-    , m_reasonNamesDevice(false)
-    , m_capabilitiesLogged(false)
+    , m_gain(1, 1, 1)
+    , m_hwReleasePath(QLatin1String(DeviceInfo::HwReleasePath))
+    , m_output(nullptr)
     , m_sunLocated(false)
     , m_sunLatitude(0)
     , m_sunLongitude(0)
@@ -104,7 +100,12 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     m_active = true;
 
     // The display hardware keeps its matrix after the compositor is gone
-    connect(qApp, &QCoreApplication::aboutToQuit, this, &OwlfishController::stopPq);
+    connect(qApp, &QCoreApplication::aboutToQuit, this, &OwlfishController::stopHardware);
+    // The kinds of display hardware, in the order they are tried. Nothing
+    // is loaded or called until a choice needs it.
+    setHardwareOutputs({ new MediaTekOutput(nullptr, m_hwReleasePath, QLatin1String(PqDisplay::DeviceTreePath)),
+                         new QualcommOutput },
+                       m_hwReleasePath);
 
     m_settings = new OwlfishSettings(this);
     connect(m_settings, &OwlfishSettings::changed, this, &OwlfishController::applySettings);
@@ -134,16 +135,25 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
 
 OwlfishController::~OwlfishController()
 {
-    stopPq();
+    stopHardware();
 }
 
-void OwlfishController::setDisplayHardware(PqDisplay::Backend *backend, const QString &hwReleasePath,
-                                           const QString &deviceTreePath)
+void OwlfishController::setHardwareOutputs(const QList<FilterOutput *> &outputs, const QString &hwReleasePath)
 {
-    m_pq.reset(new PqDisplay(backend));
+    qDeleteAll(m_hardware);
+    m_hardware = outputs;
     m_hwReleasePath = hwReleasePath;
-    m_deviceTreePath = deviceTreePath;
-    m_ccorrRead = false;
+    for (FilterOutput *output : m_hardware) {
+        output->setParent(this);
+        connectOutput(output);
+    }
+}
+
+void OwlfishController::connectOutput(FilterOutput *output)
+{
+    connect(output, &FilterOutput::checked, this, &OwlfishController::outputChecked);
+    connect(output, &FilterOutput::applied, this, &OwlfishController::outputApplied);
+    connect(output, &FilterOutput::failed, this, &OwlfishController::outputFailed);
 }
 
 QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, qreal dimPercent)
@@ -184,11 +194,9 @@ void OwlfishController::resetCrashGuard()
 
 QString OwlfishController::renderer() const
 {
-    if (!m_item)
+    if (!m_output)
         return QStringLiteral("none");
-    if (m_pqActive)
-        return QStringLiteral("pq");
-    return ColorFilter::rendererName(m_item->renderer());
+    return m_output->name();
 }
 
 QString OwlfishController::diagnostics() const
@@ -199,28 +207,13 @@ QString OwlfishController::diagnostics() const
           << QStringLiteral("system %1").arg(systemName())
           << QStringLiteral("status %1").arg(status());
     lines << QStringLiteral("renderer %1 (%2)")
-             .arg(renderer(), m_item ? m_rendererReason : status());
+             .arg(renderer(), m_output ? m_rendererReason : status());
     if (m_settings)
         lines << QStringLiteral("renderer key %1").arg(m_settings->renderer());
-    // Unless the reason already names it
-    if (!m_reasonNamesDevice) {
-        const QString device = PqDisplay::deviceId(m_hwReleasePath);
-        lines << QStringLiteral("device %1, %2")
-                 .arg(device.isEmpty() ? QStringLiteral("unknown") : device,
-                      PqDisplay::isVerified(device) ? QStringLiteral("verified") : QStringLiteral("not verified"));
-    }
-    if (m_ccorrRead)
-        lines << QStringLiteral("display colour correction %1").arg(PqDisplay::describe(m_ccorr));
-    if (m_pq->isOpen()) {
-        lines << QStringLiteral("display hardware version %1, %2 calls, mean %3 ms, max %4 ms")
-                 .arg(m_pq->interfaceVersion()).arg(m_pq->calls())
-                 .arg(m_pq->meanCallMs(), 0, 'f', 2).arg(m_pq->maxCallMs(), 0, 'f', 2);
-        if (!m_pq->error().isEmpty())
-            lines << QStringLiteral("display hardware error: %1").arg(m_pq->error());
-    } else {
-        lines << QStringLiteral("display hardware %1")
-                 .arg(m_pq->error().isEmpty() ? QStringLiteral("not checked") : m_pq->error());
-    }
+    const QString device = DeviceInfo::id(m_hwReleasePath);
+    lines << QStringLiteral("device %1").arg(device.isEmpty() ? QStringLiteral("unknown") : device);
+    for (const FilterOutput *output : m_hardware)
+        lines << output->diagnostics();
     if (m_settings) {
         const QString correction = m_settings->correction();
         QString line = QStringLiteral("correction %1").arg(correction);
@@ -243,24 +236,14 @@ QString OwlfishController::diagnostics() const
                          QTime(0, 0).addSecs(m_settings->dimTo() * 60).toString(QStringLiteral("HH:mm")))
                   : QStringLiteral("dimming when %1").arg(when));
     }
-    // Only checked once the GPU draws
-    if (m_item && m_item->capabilities().detected) {
-        const ColorFilter::Capabilities capabilities = m_item->capabilities();
-        lines << QStringLiteral("GL %1, %2, %3")
-                 .arg(QString::fromLatin1(capabilities.vendor), QString::fromLatin1(capabilities.renderer),
-                      QString::fromLatin1(capabilities.version))
-              << QStringLiteral("fetch %1, %2")
-                 .arg(ColorFilter::fetchExtensionName(capabilities.fetch),
-                      capabilities.fetchWorks ? QStringLiteral("works") : QStringLiteral("not usable"));
-    }
+    if (m_gpu)
+        lines << m_gpu->diagnostics();
     return lines.join(QLatin1Char('\n'));
 }
 
 bool OwlfishController::matrixSupported() const
 {
-    if (m_pqActive)
-        return true;
-    return m_item && m_item->renderer() == ColorFilter::Fetch && m_item->capabilities().fetchWorks;
+    return m_output && m_output->supportsMatrix();
 }
 
 QMatrix3x3 OwlfishController::colourMatrix(qreal colourStrength) const
@@ -298,14 +281,8 @@ void OwlfishController::findWindow()
 void OwlfishController::attach(QQuickWindow *window)
 {
     m_window = window;
-    m_item = new ColorFilterItem(window->contentItem());
-    m_item->setObjectName(QStringLiteral("owlfish-filter"));
-    m_item->setZ(FilterZ);
-    connect(m_item.data(), &ColorFilterItem::rendererChanged, this, &OwlfishController::rendererChanged);
-
-    connect(window, &QWindow::widthChanged, this, &OwlfishController::updateItemGeometry);
-    connect(window, &QWindow::heightChanged, this, &OwlfishController::updateItemGeometry);
-    updateItemGeometry();
+    m_gpu.reset(new GpuOutput(window));
+    connectOutput(m_gpu.data());
 
     qCInfo(lcOwlfish) << "Filter attached to" << window->metaObject()->className();
 
@@ -326,15 +303,9 @@ void OwlfishController::attach(QQuickWindow *window)
     m_healthyTimer.start();
 }
 
-void OwlfishController::updateItemGeometry()
-{
-    if (m_item && m_window)
-        m_item->setSize(QSizeF(m_window->width(), m_window->height()));
-}
-
 void OwlfishController::applySettings()
 {
-    if (!m_item)
+    if (!m_gpu)
         return;
 
     updateRenderer();
@@ -517,13 +488,13 @@ void OwlfishController::displayStatusChanged(const QString &status)
         return;
     m_displayOn = on;
     updateScheduleTimer();
-    if (on && m_item)
+    if (on && m_gpu)
         scheduleTick();
 }
 
 void OwlfishController::updateGain(int fadeMs)
 {
-    if (!m_item)
+    if (!m_gpu)
         return;
 
     if (!m_settings->enabled()) {
@@ -542,124 +513,116 @@ void OwlfishController::updateGain(int fadeMs)
 void OwlfishController::updateRenderer()
 {
     const QString key = m_settings->renderer();
-    // The GPU is fetch wherever it works, blend otherwise. blend and fetch
-    // skip the display hardware.
-    const bool forcedFetch = key == QLatin1String("fetch");
-    const bool forcedBlend = key == QLatin1String("blend");
-    const bool forcedGpu = forcedBlend || forcedFetch;
-    const bool forcedPq = key == QLatin1String("pq");
-    if (!forcedGpu && !forcedPq && key != QLatin1String("auto"))
+    // A key may name an output, which is then the only one tried
+    const bool forcedGpu = m_gpu->isNamed(key);
+    FilterOutput *forced = nullptr;
+    for (FilterOutput *output : m_hardware) {
+        if (output->isNamed(key))
+            forced = output;
+    }
+    if (!forcedGpu && !forced && key != QLatin1String("auto"))
         qCWarning(lcOwlfish) << "Unknown renderer" << key << "- using auto";
+    for (FilterOutput *output : m_hardware)
+        output->configure(m_settings);
+    m_gpu->configure(m_settings);
 
-    bool pq = false;
+    // The first display hardware that applies to the device and works.
+    // Checking it may take a while (outputChecked()); the GPU until then.
+    FilterOutput *hardware = nullptr;
     QString reason;
-    bool namesDevice = false;
-    if (m_pqFailed) {
-        reason = m_rendererReason;
+    if (!m_failure.isEmpty()) {
+        reason = m_failure;
     } else if (forcedGpu) {
         reason = QStringLiteral("forced by the renderer key");
     } else {
-        // The device tree says whether the display controller's colour
-        // correction is the kind whose scale is known. Nothing is loaded or
-        // called on other devices.
-        if (!m_ccorrRead) {
-            m_ccorr = PqDisplay::ccorr(m_deviceTreePath);
-            m_ccorrRead = true;
-        }
-        const QString device = PqDisplay::deviceId(m_hwReleasePath);
-        const bool verified = PqDisplay::isVerified(device);
-        const bool detected = PqDisplay::isKnown(m_ccorr);
-        if (!forcedPq && !verified && !detected) {
-            reason = device.isEmpty() ? QStringLiteral("device unknown")
-                                      : QStringLiteral("device %1 not verified").arg(device);
-            namesDevice = true;
-        } else if (!m_pq->open()) {
-            reason = QStringLiteral("display hardware not available: %1").arg(m_pq->error());
-        } else {
-            pq = true;
-            namesDevice = !forcedPq && verified;
-            if (forcedPq)
-                reason = QStringLiteral("forced by the renderer key");
-            else if (verified)
-                reason = QStringLiteral("device %1 verified").arg(device);
-            else
-                reason = QStringLiteral("display hardware detected");
+        reason = QStringLiteral("no display hardware");
+        for (FilterOutput *output : m_hardware) {
+            if (forced ? output != forced : !output->applies())
+                continue;
+            output->check();
+            reason = forced ? QStringLiteral("forced by the renderer key") : output->reason();
+            if (output->state() == FilterOutput::Ready) {
+                hardware = output;
+                break;
+            }
+            if (forced)
+                reason += QStringLiteral(", ") + output->reason();
+            if (output->state() == FilterOutput::Checking)
+                break;
         }
     }
 
-    // Until the item has checked it (at its first frame), Fetch counts as
-    // working
-    const ColorFilter::Capabilities capabilities = m_item->capabilities();
-    const bool fetchFails = capabilities.detected && !capabilities.fetchWorks;
-    m_item->setRenderer(!forcedBlend && !fetchFails ? ColorFilter::Fetch : ColorFilter::Blend);
-    if (!pq && !forcedBlend && fetchFails) {
-        const QString noFetch = QStringLiteral("fetch not supported (extension %1)")
-                .arg(ColorFilter::fetchExtensionName(capabilities.fetch));
-        reason = forcedFetch ? noFetch : reason + QStringLiteral(", ") + noFetch;
+    FilterOutput *output = hardware ? hardware : m_gpu.data();
+    if (hardware && !hardware->activate()) {
+        m_failure = hardware->reason();
+        reason = m_failure;
+        output = m_gpu.data();
     }
+    // How the GPU draws, if it does
+    if (output == m_gpu.data() && !m_gpu->reason().isEmpty())
+        reason += QStringLiteral(", ") + m_gpu->reason();
 
-    if (pq && !m_pqActive) {
-        // Also clears whatever an earlier run left behind
-        if (m_pq->reset()) {
-            m_pqActive = true;
-        } else {
-            m_pqFailed = true;
-            reason = QStringLiteral("display hardware failed: %1").arg(m_pq->error());
-            namesDevice = false;
-        }
-    } else if (!pq && m_pqActive) {
-        stopPq();
-    }
-    m_item->setVisible(!m_pqActive);
+    if (m_output && m_output != output)
+        m_output->deactivate();
+    m_output = output;
+    // Visible only while it applies the filter
+    if (output == m_gpu.data())
+        m_gpu->activate();
+    else
+        m_gpu->deactivate();
 
-    m_reasonNamesDevice = namesDevice;
     if (reason != m_rendererReason) {
         m_rendererReason = reason;
         qCInfo(lcOwlfish) << "Renderer" << qPrintable(renderer()) << "-" << qPrintable(reason);
     }
-    pushPq();
+    pushFilter();
 }
 
-void OwlfishController::pushPq()
+void OwlfishController::pushFilter()
 {
-    if (!m_pqActive || !m_item)
+    if (!m_gpu)
         return;
-    if (!m_pq->setMatrix(ColorMatrix::withGain(m_matrix, m_item->gain())))
-        pqFailed();
+    m_gpu->apply(m_gain, m_matrix);
+    if (m_output && m_output != m_gpu.data())
+        m_output->apply(m_gain, m_matrix);
 }
 
-void OwlfishController::stopPq()
+void OwlfishController::stopHardware()
 {
-    if (!m_pqActive)
+    if (m_output && m_output != m_gpu.data())
+        m_output->deactivate();
+}
+
+void OwlfishController::outputChecked()
+{
+    if (!m_gpu)
         return;
-    m_pqActive = false;
-    m_pq->reset();
-}
-
-void OwlfishController::pqFailed()
-{
-    m_pqFailed = true;
-    m_rendererReason = QStringLiteral("display hardware failed: %1").arg(m_pq->error());
-    m_reasonNamesDevice = false;
-    // Whatever can still be reset
-    stopPq();
-    if (m_item)
-        m_item->setVisible(true);
-    qCWarning(lcOwlfish) << "Renderer" << qPrintable(renderer()) << "-" << qPrintable(m_rendererReason);
-}
-
-void OwlfishController::rendererChanged()
-{
-    if (!m_item || m_capabilitiesLogged || !m_item->capabilities().detected)
-        return;
-    m_capabilitiesLogged = true;
-    const ColorFilter::Capabilities capabilities = m_item->capabilities();
-    qCInfo(lcOwlfish) << "OpenGL" << capabilities.vendor << capabilities.renderer << capabilities.version
-                        << "fetch" << ColorFilter::fetchExtensionName(capabilities.fetch)
-                        << (capabilities.fetchWorks ? "works" : "not usable");
-    // Now it is known whether the correction and the saturation can be drawn
+    // A better output, or the matrix, may apply now
     updateRenderer();
     updateGain(SettingsFadeMs);
+}
+
+void OwlfishController::outputApplied()
+{
+    // A command-mode panel only shows it with a new frame
+    if (m_window && sender() == m_output)
+        m_window->update();
+}
+
+void OwlfishController::outputFailed()
+{
+    FilterOutput *output = qobject_cast<FilterOutput *>(sender());
+    if (!output || output != m_output || output == m_gpu.data())
+        return;
+    m_failure = output->reason();
+    m_rendererReason = m_failure;
+    if (!m_gpu->reason().isEmpty())
+        m_rendererReason += QStringLiteral(", ") + m_gpu->reason();
+    // Whatever can still be reset
+    output->deactivate();
+    m_output = m_gpu.data();
+    m_gpu->activate();
+    qCWarning(lcOwlfish) << "Renderer" << qPrintable(renderer()) << "-" << qPrintable(m_rendererReason);
 }
 
 void OwlfishController::updateLightSensor()
@@ -746,7 +709,7 @@ void OwlfishController::queryCurrentLux()
 void OwlfishController::fadeTo(const QVector3D &gain, const QMatrix3x3 &matrix, int durationMs)
 {
     m_animation.stop();
-    m_fromGain = m_item->gain();
+    m_fromGain = m_gain;
     m_toGain = gain;
     m_fromMatrix = m_matrix;
     m_toMatrix = matrix;
@@ -758,12 +721,10 @@ void OwlfishController::fadeTo(const QVector3D &gain, const QMatrix3x3 &matrix, 
 
 void OwlfishController::animate(const QVariant &progress)
 {
-    if (!m_item)
+    if (!m_gpu)
         return;
     const float t = progress.toFloat();
-    m_item->setGain(m_fromGain + (m_toGain - m_fromGain) * t);
+    m_gain = m_fromGain + (m_toGain - m_fromGain) * t;
     m_matrix = m_fromMatrix + (m_toMatrix - m_fromMatrix) * t;
-    // Drawn by Fetch or the display hardware
-    m_item->setMatrix(m_matrix);
-    pushPq();
+    pushFilter();
 }

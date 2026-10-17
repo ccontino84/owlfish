@@ -8,8 +8,8 @@
 #   schedule  the night's times: fixed, sunset to sunrise, time zone city
 #   sensor    the ambient light cut-off
 #   output    where the filter is applied: the GPU, or the display hardware
-#             (MediaTek's PQ service)
-OWLFISH_DIRS = core colour schedule sensor output/gpu output/mediatek
+#             (MediaTek's PQ service, Qualcomm's QDCM through the helper)
+OWLFISH_DIRS = core colour schedule sensor output output/gpu output/mediatek output/qualcomm
 INCLUDEPATH += $$PWD
 for(dir, OWLFISH_DIRS): INCLUDEPATH += $$PWD/$$dir
 
@@ -21,6 +21,7 @@ LIBS += -ldl
 HEADERS += \
     $$PWD/core/controller.h \
     $$PWD/core/crashguard.h \
+    $$PWD/core/deviceinfo.h \
     $$PWD/core/logging.h \
     $$PWD/core/settings.h \
     $$PWD/core/statusservice.h \
@@ -32,13 +33,19 @@ HEADERS += \
     $$PWD/schedule/timezonelocation.h \
     $$PWD/sensor/alscalibration.h \
     $$PWD/sensor/ambientcutoff.h \
+    $$PWD/output/filteroutput.h \
     $$PWD/output/gpu/colorfilteritem.h \
     $$PWD/output/gpu/colorfiltermaterial.h \
-    $$PWD/output/mediatek/pqdisplay.h
+    $$PWD/output/gpu/gpuoutput.h \
+    $$PWD/output/mediatek/mediatekoutput.h \
+    $$PWD/output/mediatek/pqdisplay.h \
+    $$PWD/output/qualcomm/qualcommoutput.h \
+    $$PWD/output/qualcomm/qualcommclient.h
 
 SOURCES += \
     $$PWD/core/controller.cpp \
     $$PWD/core/crashguard.cpp \
+    $$PWD/core/deviceinfo.cpp \
     $$PWD/core/logging.cpp \
     $$PWD/core/settings.cpp \
     $$PWD/core/statusservice.cpp \
@@ -50,9 +57,14 @@ SOURCES += \
     $$PWD/schedule/timezonelocation.cpp \
     $$PWD/sensor/alscalibration.cpp \
     $$PWD/sensor/ambientcutoff.cpp \
+    $$PWD/output/filteroutput.cpp \
     $$PWD/output/gpu/colorfilteritem.cpp \
     $$PWD/output/gpu/colorfiltermaterial.cpp \
-    $$PWD/output/mediatek/pqdisplay.cpp
+    $$PWD/output/gpu/gpuoutput.cpp \
+    $$PWD/output/mediatek/mediatekoutput.cpp \
+    $$PWD/output/mediatek/pqdisplay.cpp \
+    $$PWD/output/qualcomm/qualcommoutput.cpp \
+    $$PWD/output/qualcomm/qualcommclient.cpp
 
 # The package version, for the settings page; the spec is the one source.
 # It goes into a generated header, rewritten only when it changes, so that

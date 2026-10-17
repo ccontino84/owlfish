@@ -49,12 +49,13 @@ class MDConfItem;
 //   correction_strength  percent, 0 (no change) to 100, default 50; not
 //                        for greyscale
 // Not on the settings page, for troubleshooting:
-//   renderer             "auto" (default): the display hardware on verified
-//                        devices, the GPU elsewhere (fetch, or blend where
-//                        fetch doesn't work); "blend": always the GPU's
+//   renderer             "auto" (default): the display hardware where it is
+//                        detected and works, the GPU elsewhere (fetch, or
+//                        blend where fetch doesn't work); "blend": always the GPU's
 //                        multiply blend; "fetch": always the GPU with
-//                        framebuffer fetch; "pq": the display hardware
-//                        also on devices not verified (MediaTek only)
+//                        framebuffer fetch; "pq" or "qualcomm": only that
+//                        display hardware (MediaTek's, the Qualcomm
+//                        helper's), also where it isn't detected
 // Written by the plugin, for the settings page:
 //   als_max_lux          the most the light sensor can report, in lux, so the
 //                        settings page offers no threshold it can't reach;
