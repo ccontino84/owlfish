@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.5.0 (unreleased)
+## 1.5.0 (2026-10-17)
 - Xperia devices: with the new, optional `owlfish-qualcomm` package, the display hardware applies the filter, as on the Jolla Phone, instead of the graphics processor. Screenshots no longer include the tint. Owlfish checks the hardware at every start and uses the graphics processor if the check fails. Without the package nothing changes.
 
 ## 1.4.0 (2026-10-06)
