@@ -3126,7 +3126,9 @@ void tst_Owlfish::qualcommOverDBus()
     QDBusConnection helperBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
                                                              QStringLiteral("owlfish-test-helper"));
     FakeComposer composer;
-    {
+    // Not lipstick, so refused; root is always accepted (the release
+    // workflow's container)
+    if (getuid() != 0) {
         QDBusConnection pluginBus = QDBusConnection::connectToBus(QDBusConnection::SessionBus,
                                                                  QStringLiteral("owlfish-test-plugin"));
         QDBusConnection::disconnectFromBus(QStringLiteral("owlfish-test-plugin"));
@@ -3134,7 +3136,6 @@ void tst_Owlfish::qualcommOverDBus()
         if (!helper->registerOn(helperBus))
             QSKIP("Cannot register the helper on the session bus");
 
-        // Not lipstick, so refused
         QualcommClient refused(QualcommClient::createDBusBackend(pluginBus));
         QSignalSpy refusedChecked(&refused, SIGNAL(checked()));
         refused.check();
