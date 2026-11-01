@@ -8,10 +8,13 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QGenericPlugin>
+#include <QPointer>
 #include <QTimer>
 
-// Loaded through QT_QPA_GENERIC_PLUGINS=owlfish (00-owlfish.conf, written by
-// config/update-env when the package is installed).
+// Loaded by the lipstickaddons loader (key lipstickaddon-owlfish, see
+// lipstick-addons.md) through QT_QPA_GENERIC_PLUGINS=lipstickaddons
+// (00-owlfish.conf, written by config/update-env when the package is
+// installed), or directly by its own key, owlfish.
 //
 // An optional specification tunes where the filter attaches, for testing:
 //   owlfish:class=<QQuickWindow subclass>:process=<executable name or *>
@@ -24,7 +27,8 @@ class OwlfishPlugin : public QGenericPlugin
 public:
     QObject *create(const QString &key, const QString &specification) override
     {
-        if (key.compare(QLatin1String("owlfish"), Qt::CaseInsensitive) != 0)
+        if (key.compare(QLatin1String("owlfish"), Qt::CaseInsensitive) != 0
+                && key.compare(QLatin1String("lipstickaddon-owlfish"), Qt::CaseInsensitive) != 0)
             return nullptr;
 
         QByteArray windowClass("LipstickCompositor");
@@ -51,7 +55,16 @@ public:
             return new QObject;
         }
 
+        // Once per process: the same plugin may be named by the environment
+        // and found by the loader. An empty object, not none, which makes Qt
+        // log "No such plugin". Again once the first is gone (tests).
+        if (m_controller) {
+            qCDebug(lcOwlfish) << "Already running";
+            return new QObject;
+        }
+
         OwlfishController *controller = new OwlfishController(windowClass);
+        m_controller = controller;
         // Also when the crash guard has tripped, so that the settings page
         // can say so. Created during QGuiApplication's setup; register once
         // the event loop runs.
@@ -61,6 +74,10 @@ public:
         });
         return controller;
     }
+
+private:
+    // One plugin instance per process: Qt keeps it as long as the library
+    QPointer<OwlfishController> m_controller;
 };
 
 #include "plugin.moc"

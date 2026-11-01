@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.0 (unreleased)
+- Works side by side with other home screen add-ons, such as Frogfish: Owlfish now starts through a small shared loader, so the add-ons no longer compete for the same setting.
+
 ## 1.5.0 (2026-10-17)
 - Xperia devices: with the new, optional `owlfish-qualcomm` package, the display hardware applies the filter, as on the Jolla Phone, instead of the graphics processor. Screenshots no longer include the tint. Owlfish checks the hardware at every start and uses the graphics processor if the check fails. Without the package nothing changes.
 

@@ -566,6 +566,8 @@ private slots:
     void pluginSunSchedule();
     void pluginPolarSun();
     void pluginIgnoresOtherProcesses();
+    void pluginOncePerProcess();
+    void loaderStartsOwlfish();
 
 private:
     QQuickView *createView();
@@ -2344,6 +2346,17 @@ void tst_Owlfish::updateEnv_data()
     QTest::newRow("own file removed")
             << "00-owlfish.conf=QT_QPA_GENERIC_PLUGINS=owlfish\n"
                "|50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\n" << false;
+    // Other add-ons' files (lipstick-addons.md) are not the device's
+    QTest::newRow("frogfish")
+            << "01-frogfish.conf=QT_QPA_GENERIC_PLUGINS=owlfish,lipstickaddons\n" << true;
+    QTest::newRow("another add-on")
+            << "05-other.conf=QT_QPA_GENERIC_PLUGINS=lipstickaddon-other:x=1\n" << true;
+    QTest::newRow("a port's plugins before frogfish")
+            << "01-frogfish.conf=QT_QPA_GENERIC_PLUGINS=owlfish,lipstickaddons\n"
+               "|50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch,lipstickaddon-other\n" << false;
+    QTest::newRow("hand-made list with the loader")
+            << "50-port.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch\n"
+               "|zz-fix.conf=QT_QPA_GENERIC_PLUGINS=evdevtouch,lipstickaddons\n" << true;
 }
 
 void tst_Owlfish::updateEnv()
@@ -2370,7 +2383,7 @@ void tst_Owlfish::updateEnv()
     QCOMPARE(own.exists(), active);
     if (active) {
         QVERIFY(own.open(QIODevice::ReadOnly));
-        QCOMPARE(own.readAll(), QByteArray("QT_QPA_GENERIC_PLUGINS=owlfish\n"));
+        QCOMPARE(own.readAll(), QByteArray("QT_QPA_GENERIC_PLUGINS=lipstickaddons\n"));
         QVERIFY(process.readAllStandardOutput().isEmpty());
     } else {
         const QString message = QString::fromUtf8(process.readAllStandardOutput());
@@ -2887,6 +2900,51 @@ void tst_Owlfish::pluginIgnoresOtherProcesses()
     QScopedPointer<QObject> plugin(QGenericPluginFactory::create(QStringLiteral("owlfish"), QString()));
     QVERIFY(plugin);
     QVERIFY(!plugin->inherits("OwlfishController"));
+    // Nor through the loader, which then starts nothing
+    QScopedPointer<QObject> loader(QGenericPluginFactory::create(QStringLiteral("lipstickaddons"), QString()));
+    QVERIFY(loader);
+    QVERIFY(loader->children().isEmpty());
+}
+
+void tst_Owlfish::pluginOncePerProcess()
+{
+    QFile::remove(CrashGuard::defaultFilePath());
+    QCoreApplication::addLibraryPath(QStringLiteral(OWLFISH_PLUGINS_DIR));
+    QScopedPointer<QObject> first(QGenericPluginFactory::create(
+            QStringLiteral("owlfish"), QStringLiteral("class=QQuickView:process=*")));
+    QVERIFY(first);
+    QVERIFY(first->inherits("OwlfishController"));
+    // Named by the environment and found by the loader: only one runs
+    QScopedPointer<QObject> second(QGenericPluginFactory::create(
+            QStringLiteral("lipstickaddon-owlfish"), QStringLiteral("class=QQuickView:process=*")));
+    QVERIFY(second);
+    QCOMPARE(second->metaObject()->className(), "QObject");
+    // Again once the first is gone
+    first.reset();
+    second.reset(QGenericPluginFactory::create(
+            QStringLiteral("lipstickaddon-owlfish"), QStringLiteral("class=QQuickView:process=*")));
+    QVERIFY(second->inherits("OwlfishController"));
+}
+
+void tst_Owlfish::loaderStartsOwlfish()
+{
+    QFile::remove(CrashGuard::defaultFilePath());
+    QCoreApplication::addLibraryPath(QStringLiteral(OWLFISH_PLUGINS_DIR));
+    QVERIFY(QGenericPluginFactory::keys().contains(QStringLiteral("lipstickaddon-owlfish")));
+    // Through the loader, found by its key prefix
+    QScopedPointer<QObject> loader(QGenericPluginFactory::create(
+            QStringLiteral("lipstickaddons"), QStringLiteral("class=QQuickView:process=*")));
+    QVERIFY(loader);
+    QCOMPARE(loader->children().count(), 1);
+    QVERIFY(loader->children().first()->inherits("OwlfishController"));
+
+    // Once per process: by its own key too, and by the loader again
+    QScopedPointer<QObject> direct(QGenericPluginFactory::create(
+            QStringLiteral("owlfish"), QStringLiteral("class=QQuickView:process=*")));
+    QCOMPARE(direct->metaObject()->className(), "QObject");
+    QScopedPointer<QObject> loaderAgain(QGenericPluginFactory::create(
+            QStringLiteral("lipstickaddons"), QStringLiteral("process=*")));
+    QVERIFY(loaderAgain->children().isEmpty());
 }
 
 void tst_Owlfish::qdcmArguments()

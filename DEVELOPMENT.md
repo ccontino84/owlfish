@@ -8,8 +8,9 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 
 | File | Purpose |
 |---|---|
-| `/usr/lib64/qt5/plugins/generic/libowlfish.so` | the plugin |
-| `/var/lib/environment/compositor/00-owlfish.conf` | `QT_QPA_GENERIC_PLUGINS=owlfish`, read by `lipstick.service`; not shipped (`%ghost`) |
+| `/usr/lib64/qt5/plugins/generic/libowlfish.so` | the plugin (keys `owlfish` and `lipstickaddon-owlfish`) |
+| `/usr/lib64/qt5/plugins/generic/liblipstickaddons-owlfish.so` | Owlfish's copy of the lipstickaddons loader (`loader/`, [lipstick-addons.md](lipstick-addons.md)) |
+| `/var/lib/environment/compositor/00-owlfish.conf` | `QT_QPA_GENERIC_PLUGINS=lipstickaddons`, read by `lipstick.service`; not shipped (`%ghost`) |
 | `/usr/libexec/owlfish/update-env` | writes the file above from the RPM's `%post` (see below) |
 | `/usr/share/jolla-settings/entries/owlfish.json` | registers the Settings page and the top menu shortcut |
 | `/usr/share/jolla-settings/pages/owlfish/*.qml` | Settings page and top menu shortcut |
@@ -17,7 +18,13 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 
 - **Loading:** `lipstick.service` reads `EnvironmentFile=-/var/lib/environment/compositor/*.conf`.
   Qt 5.6 appends the `QT_QPA_GENERIC_PLUGINS` entries to lipstick's own
-  `-plugin` arguments, so no file of another package is touched. The plugin
+  `-plugin` arguments, so no file of another package is touched. Since 1.6
+  the value names the lipstickaddons loader, which starts every installed
+  plugin with a `lipstickaddon-` key, Owlfish's included, so that other
+  add-ons (Frogfish) share the variable; the contract is in
+  [lipstick-addons.md](lipstick-addons.md), and `loader/loader.cpp` must
+  stay identical to the other add-ons' copies. Owlfish starts once per
+  process, whether by its own key or through the loader. The plugin
   waits for the `LipstickCompositor` window and parents a `ColorFilterItem`
   to its content item with a very high `z`.
 - **Sharing the variable:** systemd reads those files sorted by name, and
@@ -26,8 +33,10 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   plugins that way), so Owlfish must not replace their value. On every
   install and upgrade `config/update-env` computes the value the device
   sets without Owlfish, the same way (ignoring `00-owlfish.conf` and 1.1.0's
-  `90-owlfish.conf`). Only if it is empty or already names `owlfish` does
-  it write `00-owlfish.conf`; otherwise it removes it and prints a warning
+  `90-owlfish.conf`). Only if it is empty, is made of add-on keys alone
+  (`owlfish`, `frogfish`, `lipstickaddons`, `lipstickaddon-*`; another
+  add-on's file, such as Frogfish's `01-frogfish.conf`) or already starts
+  Owlfish does it write `00-owlfish.conf`; otherwise it removes it and prints a warning
   (hidden by `pkcon` and other PackageKit-based installers; `rpm` and
   `zypper` show it), and the installation still succeeds. The `00-` name is
   read first, so a device file added later wins: Owlfish becomes inactive
@@ -40,7 +49,8 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   A double tap on its header opens a hidden page with `diagnostics()` and a
   Copy button, for support (without a reply, the page writes the status it
   found instead).
-  Without a reply it reads `00-owlfish.conf`: missing means "not supported
+  Without a reply it reads `00-owlfish.conf`: missing (or without the
+  variable) means "not supported
   on this device", present means "restart the phone". A device file added
   after installation also looks like the latter; reinstalling runs the
   check again.

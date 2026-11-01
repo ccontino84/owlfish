@@ -104,6 +104,7 @@ exit 0
 %files
 %license LICENSE
 %{_libdir}/qt5/plugins/generic/libowlfish.so
+%{_libdir}/qt5/plugins/generic/liblipstickaddons-owlfish.so
 %dir /usr/libexec/owlfish
 %attr(755,root,root) /usr/libexec/owlfish/update-env
 %ghost %attr(644,root,root) %{_sharedstatedir}/environment/compositor/00-owlfish.conf

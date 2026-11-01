@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: LGPL-2.1-only
 #
 # Run by the RPM on every install and upgrade: creates 00-owlfish.conf, which
-# makes the home screen load Owlfish, unless the device's own configuration
-# already sets QT_QPA_GENERIC_PLUGINS. Owlfish then stays inactive instead of
-# taking the device's plugins away (a port's touch or keyboard input, for
-# example). Never fails the installation; exits 1 on a conflict.
+# makes the home screen start the add-ons, Owlfish among them, through the
+# lipstickaddons loader (lipstick-addons.md), unless the device's own
+# configuration already sets QT_QPA_GENERIC_PLUGINS. Owlfish then stays
+# inactive instead of taking the device's plugins away (a port's touch or
+# keyboard input, for example). Never fails the installation; exits 1 on a
+# conflict.
 #
 #   update-env [directory, default /var/lib/environment/compositor]
 #
@@ -14,6 +16,7 @@
 
 dir=${1:-/var/lib/environment/compositor}
 own=00-owlfish.conf
+ours=lipstickaddons
 
 # The value lipstick gets without Owlfish, the way systemd reads
 # EnvironmentFile=-.../*.conf: files sorted by name, the last assignment wins.
@@ -33,19 +36,26 @@ for file in "$dir"/*.conf; do
     source=$file
 done
 
-# Also accepts a device list that already names owlfish (a hand-made file)
-plugins=$(printf '%s' "$value" | tr 'A-Z' 'a-z')
-case ",$plugins," in
-    ,,|*,owlfish,*|*,owlfish:*)
-        # Older packages created the directory by shipping a file in it
-        mkdir -p "$dir" \
-            && printf 'QT_QPA_GENERIC_PLUGINS=owlfish\n' > "$dir/$own.new" \
-            && chmod 644 "$dir/$own.new" \
-            && mv -f "$dir/$own.new" "$dir/$own"
-        ;;
-    *)
-        rm -f "$dir/$own"
-        echo "owlfish: installed but inactive: $source sets QT_QPA_GENERIC_PLUGINS. Please report it at https://github.com/ccontino84/owlfish/issues"
-        exit 1
-        ;;
-esac
+# Only the add-ons' own keys (with or without a specification) are ours to
+# replace, such as another add-on's file (Frogfish's 01-frogfish.conf);
+# anything else belongs to the device. A device list that already starts
+# Owlfish is fine too (a hand-made file).
+conflict=
+loads=
+for plugin in $(printf '%s' "$value" | tr 'A-Z' 'a-z' | tr ',' ' '); do
+    case ${plugin%%:*} in
+        owlfish|lipstickaddons|lipstickaddon-owlfish) loads=1 ;;
+        frogfish|lipstickaddon-*) ;;
+        *) conflict=1 ;;
+    esac
+done
+if [ -n "$conflict" ] && [ -z "$loads" ]; then
+    rm -f "$dir/$own"
+    echo "owlfish: installed but inactive: $source sets QT_QPA_GENERIC_PLUGINS. Please report it at https://github.com/ccontino84/owlfish/issues"
+    exit 1
+fi
+# Older packages created the directory by shipping a file in it
+mkdir -p "$dir" \
+    && printf 'QT_QPA_GENERIC_PLUGINS=%s\n' "$ours" > "$dir/$own.new" \
+    && chmod 644 "$dir/$own.new" \
+    && mv -f "$dir/$own.new" "$dir/$own"

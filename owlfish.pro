@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: LGPL-2.1-only
 
 TEMPLATE = subdirs
-SUBDIRS = src qualcomm-helper
+SUBDIRS = src loader qualcomm-helper
 
 # Host-side tests; the RPM build passes CONFIG+=notests
 !notests {
     SUBDIRS += tests
-    tests.depends = src
+    tests.depends = src loader
 }
 
 # Writes the compositor environment file that loads the plugin; run by the
@@ -36,6 +36,7 @@ for(scale, $$list(z1.0 z1.25 z1.5 z1.5-large z1.75 z2.0 z2.5)) {
 
 OTHER_FILES += \
     rpm/owlfish.spec \
+    lipstick-addons.md \
     qualcomm-helper/system/* \
     config/update-env \
     settings/*.json \

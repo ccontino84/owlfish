@@ -170,12 +170,13 @@ Page {
 
     // No reply: the package only writes the environment file that loads the
     // plugin when the device does not load plugins of its own the same way
-    // (config/update-env)
+    // (config/update-env). Since 1.6 the file names the loader
+    // (lipstickaddons), before that owlfish.
     function checkEnvironmentFile() {
         var request = new XMLHttpRequest()
         request.onreadystatechange = function() {
             if (request.readyState === XMLHttpRequest.DONE) {
-                page.pluginStatus = request.responseText.indexOf("owlfish") >= 0
+                page.pluginStatus = request.responseText.indexOf("QT_QPA_GENERIC_PLUGINS") >= 0
                         ? "not-running" : "unsupported"
             }
         }
