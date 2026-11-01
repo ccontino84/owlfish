@@ -14,6 +14,8 @@ BuildRequires:  pkgconfig(Qt5Gui)
 BuildRequires:  pkgconfig(Qt5Quick)
 BuildRequires:  pkgconfig(Qt5Sensors)
 BuildRequires:  pkgconfig(mlite5)
+# lrelease, for the translations
+BuildRequires:  qt5-qttools-linguist
 Requires:   lipstick-qt5
 Requires:   qt5-qtsensors-plugin-sensorfw
 # Settings page
@@ -110,6 +112,7 @@ exit 0
 %ghost %attr(644,root,root) %{_sharedstatedir}/environment/compositor/00-owlfish.conf
 %{_datadir}/jolla-settings/entries/owlfish.json
 %{_datadir}/jolla-settings/pages/owlfish
+%{_datadir}/translations/owlfish*.qm
 %{_datadir}/themes/sailfish-default/silica/*/icons-monochrome/icon-m-owlfish.png
 
 %files qualcomm

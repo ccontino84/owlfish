@@ -11,6 +11,7 @@ moc_*
 /src/libowlfish.so*
 /qualcomm-helper/qualcomm-helper
 generated/
+/translations/*.qm
 
 # host builds
 /build/

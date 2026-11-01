@@ -24,7 +24,9 @@ Page {
             spacing: Theme.paddingLarge
 
             PageHeader {
-                title: "Diagnostics"
+                //: Header of the hidden page for bug reports
+                //% "Diagnostics"
+                title: qsTrId("owlfish-he-diagnostics")
             }
 
             Label {
@@ -37,10 +39,12 @@ Page {
 
             Button {
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: "Copy"
+                //% "Copy"
+                text: qsTrId("owlfish-bt-copy")
                 onClicked: {
                     Clipboard.text = page.text
-                    Notices.show("Copied", Notice.Short, Notice.Bottom)
+                    //% "Copied"
+                    Notices.show(qsTrId("owlfish-la-copied"), Notice.Short, Notice.Bottom)
                 }
             }
         }

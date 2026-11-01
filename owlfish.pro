@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-only
 
 TEMPLATE = subdirs
-SUBDIRS = src loader qualcomm-helper
+SUBDIRS = src loader qualcomm-helper translations
 
 # Host-side tests; the RPM build passes CONFIG+=notests
 !notests {

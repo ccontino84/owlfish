@@ -157,13 +157,17 @@ Page {
     readonly property string pluginProblem: {
         switch (pluginStatus) {
         case "unsupported":
-            return "Not supported on this device."
+            //% "Not supported on this device."
+            return qsTrId("owlfish-la-unsupported")
         case "not-running":
-            return "Not running. Restart the phone to start it."
+            //% "Not running. Restart the phone to start it."
+            return qsTrId("owlfish-la-not_running")
         case "crash-guard":
-            return "Turned off after the home screen failed to start."
+            //% "Turned off after the home screen failed to start."
+            return qsTrId("owlfish-la-crash_guard")
         case "no-window":
-            return "Couldn't attach to the home screen."
+            //% "Couldn't attach to the home screen."
+            return qsTrId("owlfish-la-no_window")
         }
         return ""
     }
@@ -298,69 +302,108 @@ Page {
     // start and end are equal
     function scheduleStatus() {
         if (!config.schedule)
-            return "Warm whenever Owlfish is enabled."
+            //% "Warm whenever Owlfish is enabled."
+            return qsTrId("owlfish-la-warm_always")
         var from = config.schedule_from
         var to = config.schedule_to
         if (config.schedule_sun) {
             if (config.sun_state === "polar_day")
-                return "Neutral all day today."
+                //% "Neutral all day today."
+                return qsTrId("owlfish-la-neutral_today")
             if (config.sun_state === "polar_night")
-                return "Warm all day today."
+                //% "Warm all day today."
+                return qsTrId("owlfish-la-warm_today")
             if (config.sun_state !== "normal")
-                return "Neutral until sunset and sunrise are known."
+                //% "Neutral until sunset and sunrise are known."
+                return qsTrId("owlfish-la-neutral_until_sun")
             from = config.sun_set
             to = config.sun_rise
         }
         var day = 24 * 60
         var length = (to - from + day) % day
         if (length === 0)
-            return "The start and end are the same, so the colour stays neutral."
+            //% "The start and end are the same, so the colour stays neutral."
+            return qsTrId("owlfish-la-same_times")
         var into = (nowMinutes - from + day) % day
         if (into < length)
-            return "Warm now; neutral from " + formatMinutes(to) + "."
-        return "Neutral now; warms up from " + formatMinutes(from) + "."
+            //: %1 is a time of day
+            //% "Warm now; neutral from %1."
+            return qsTrId("owlfish-la-warm_now").arg(formatMinutes(to))
+        //: %1 is a time of day
+        //% "Neutral now; warms up from %1."
+        return qsTrId("owlfish-la-neutral_now").arg(formatMinutes(from))
+    }
+
+    function formatPercent(percent) {
+        //: A percentage
+        //% "%1 %"
+        return qsTrId("owlfish-la-percent").arg(percent)
     }
 
     function formatDuration(minutes) {
         var hours = Math.floor(minutes / 60)
         if (hours === 0)
-            return minutes + " min"
-        return minutes % 60 === 0 ? hours + " h" : hours + " h " + (minutes % 60) + " min"
+            //: A duration in minutes
+            //% "%1 min"
+            return qsTrId("owlfish-la-minutes").arg(minutes)
+        if (minutes % 60 === 0)
+            //: A duration in hours
+            //% "%1 h"
+            return qsTrId("owlfish-la-hours").arg(hours)
+        //: A duration in hours and minutes
+        //% "%1 h %2 min"
+        return qsTrId("owlfish-la-hours_minutes").arg(hours).arg(minutes % 60)
     }
 
     // Today's sunset and sunrise, as the plugin calculated them
     function sunStatus() {
         switch (config.sun_state) {
         case "":
-            return "Sunset and sunrise appear once Owlfish is running."
+            //% "Sunset and sunrise appear once Owlfish is running."
+            return qsTrId("owlfish-la-sun_unknown")
         case "no_location":
-            return "Your time zone has no location. Set it manually below."
+            //% "Your time zone has no location. Set it manually below."
+            return qsTrId("owlfish-la-sun_no_location")
         case "polar_day":
-            return "The sun doesn't set today, so the colour stays neutral."
+            //% "The sun doesn't set today, so the colour stays neutral."
+            return qsTrId("owlfish-la-polar_day")
         case "polar_night":
-            return "The sun doesn't rise today, so the colour stays warm all day."
+            //% "The sun doesn't rise today, so the colour stays warm all day."
+            return qsTrId("owlfish-la-polar_night")
         }
 
+        //: %1 is the time zone's city, in English
+        //% "%1, from your time zone"
         var where = page.usesManualLocation
                 ? formatCoordinates(config.latitude, config.longitude)
-                : config.sun_place + ", from your time zone"
-        var text = "Today: sunset " + formatMinutes(config.sun_set) + ", sunrise "
-                + formatMinutes(config.sun_rise) + " (" + where + ")."
+                : qsTrId("owlfish-la-zone_city").arg(config.sun_place)
+        //: %1 and %2 are times of day; %3 is the place
+        //% "Today: sunset %1, sunrise %2 (%3)."
+        var lines = [qsTrId("owlfish-la-sun_times").arg(formatMinutes(config.sun_set))
+                     .arg(formatMinutes(config.sun_rise)).arg(where)]
 
         // OwlfishSchedule shortens the transitions to fit
         var night = (config.sun_rise - config.sun_set + 24 * 60) % (24 * 60)
         if (config.schedule_transition > 0 && night < 2 * config.schedule_transition)
-            text += " Tonight is only " + formatDuration(night) + " long; the change is quicker to fit."
+            //: %1 is a duration, such as "1 h 20 min"
+            //% "Tonight is only %1 long; the change is quicker to fit."
+            lines.push(qsTrId("owlfish-la-short_night").arg(formatDuration(night)))
 
         // Near the polar circles the sun crosses the horizon at a shallow
         // angle, so small errors move the times a lot
         if (Math.abs(config.sun_latitude) >= 60) {
-            text += " This far " + (config.sun_latitude > 0 ? "north" : "south")
-                    + " the times are approximate: sunset and sunrise can shift by several minutes"
-                    + (page.usesManualLocation ? "" : ", and the time zone's city may be far from you")
-                    + ". Fixed times give a steadier routine."
+            lines.push(config.sun_latitude > 0
+                       //% "This far north the times are approximate: sunset and sunrise can shift by several minutes."
+                       ? qsTrId("owlfish-la-far_north")
+                       //% "This far south the times are approximate: sunset and sunrise can shift by several minutes."
+                       : qsTrId("owlfish-la-far_south"))
+            if (!page.usesManualLocation)
+                //% "The time zone's city may also be far from you."
+                lines.push(qsTrId("owlfish-la-city_far"))
+            //% "Fixed times give a steadier routine."
+            lines.push(qsTrId("owlfish-la-fixed_steadier"))
         }
-        return text
+        return lines.join(" ")
     }
 
     function validCoordinates(latitude, longitude) {
@@ -437,7 +480,9 @@ Page {
     }
 
     function formatLux(lux) {
-        return Math.round(lux).toLocaleString(Qt.locale(), "f", 0) + " lux"
+        //: A light level
+        //% "%1 lux"
+        return qsTrId("owlfish-la-lux").arg(Math.round(lux).toLocaleString(Qt.locale(), "f", 0))
     }
 
     // Two significant digits: a meter, not a measurement
@@ -519,11 +564,14 @@ Page {
 
         PullDownMenu {
             MenuItem {
-                text: "Reset to defaults"
-                onClicked: Remorse.popupAction(page, "Reset to defaults", page.resetSettings)
+                //% "Reset to defaults"
+                text: qsTrId("owlfish-me-reset_defaults")
+                onClicked: Remorse.popupAction(page, qsTrId("owlfish-me-reset_defaults"), page.resetSettings)
             }
             MenuItem {
-                text: "Report a bug"
+                //: Opens a bug report on GitHub in the browser
+                //% "Report a bug"
+                text: qsTrId("owlfish-me-report_bug")
                 onClicked: page.reportBug()
             }
         }
@@ -535,7 +583,8 @@ Page {
 
             PageHeader {
                 title: "Owlfish"
-                description: page.pluginVersion !== "" ? "Version " + page.pluginVersion : ""
+                //% "Version %1"
+                description: page.pluginVersion !== "" ? qsTrId("owlfish-la-version").arg(page.pluginVersion) : ""
 
                 // Hidden, for support
                 MouseArea {
@@ -561,7 +610,9 @@ Page {
                 Button {
                     visible: page.pluginStatus === "crash-guard"
                     anchors.horizontalCenter: parent.horizontalCenter
-                    text: "Reset"
+                    //: Lets Owlfish start again after it turned itself off
+                    //% "Reset"
+                    text: qsTrId("owlfish-bt-reset")
                     onClicked: plugin.typedCall("resetCrashGuard", [],
                                                 function() { page.pluginStatus = "not-running" })
                 }
@@ -573,21 +624,26 @@ Page {
             }
 
             TextSwitch {
-                text: "Enabled"
-                description: "Also available as a top menu shortcut; add it in Settings > Top menu."
+                //% "Enabled"
+                text: qsTrId("owlfish-la-enabled")
+                //: "Settings > Top menu" as the phone names them
+                //% "Also available as a top menu shortcut; add it in Settings > Top menu."
+                description: qsTrId("owlfish-la-enabled_description")
                 checked: config.enabled
                 automaticCheck: false
                 onClicked: config.enabled = !checked
             }
 
             SectionHeader {
-                text: "Night light"
+                //% "Night light"
+                text: qsTrId("owlfish-he-night_light")
             }
 
             Slider {
                 id: warmthSlider
                 width: parent.width
-                label: "Warmth"
+                //% "Warmth"
+                label: qsTrId("owlfish-la-warmth")
                 // Left is no tint, right is no blue left, in 100 K steps
                 minimumValue: 0
                 maximumValue: (page.neutralTemperature - page.minimumTemperature) / 100
@@ -595,9 +651,13 @@ Page {
                 valueText: {
                     var kelvin = page.neutralTemperature - Math.round(sliderValue) * 100
                     if (kelvin === page.neutralTemperature)
-                        return kelvin + " K · no tint"
+                        //: %1 is a colour temperature in kelvin
+                        //% "%1 K · no tint"
+                        return qsTrId("owlfish-la-kelvin_no_tint").arg(kelvin)
                     if (kelvin === page.minimumTemperature)
-                        return kelvin + " K · no blue"
+                        //: %1 is a colour temperature in kelvin
+                        //% "%1 K · no blue"
+                        return qsTrId("owlfish-la-kelvin_no_blue").arg(kelvin)
                     return kelvin + " K"
                 }
                 // Applies while dragging, so the effect can be judged live
@@ -613,17 +673,20 @@ Page {
                 enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 width: parent.width
-                label: "Saturation"
+                //% "Saturation"
+                label: qsTrId("owlfish-la-saturation")
                 minimumValue: 0
                 maximumValue: 100
                 stepSize: 5
                 valueText: {
                     var saturation = Math.round(sliderValue)
                     if (saturation === 100)
-                        return "100 % · no change"
+                        //% "100 % · no change"
+                        return qsTrId("owlfish-la-saturation_full")
                     if (saturation === 0)
-                        return "0 % · grey"
-                    return saturation + " %"
+                        //% "0 % · grey"
+                        return qsTrId("owlfish-la-saturation_grey")
+                    return page.formatPercent(saturation)
                 }
                 onSliderValueChanged: {
                     var saturation = Math.round(sliderValue)
@@ -639,28 +702,33 @@ Page {
                 wrapMode: Text.Wrap
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.secondaryHighlightColor
-                text: "Not supported on this device."
+                text: qsTrId("owlfish-la-unsupported")
             }
 
             ComboBox {
                 id: whenCombo
-                label: "When"
+                //: When Night light warms the colours
+                //% "When"
+                label: qsTrId("owlfish-la-when")
 
                 menu: ContextMenu {
                     // Same order as page.whenIndex
                     MenuItem {
-                        text: "All the time"
+                        //% "All the time"
+                        text: qsTrId("owlfish-me-always")
                         onClicked: config.schedule = false
                     }
                     MenuItem {
-                        text: "Fixed times"
+                        //% "Fixed times"
+                        text: qsTrId("owlfish-me-fixed_times")
                         onClicked: {
                             config.schedule_sun = false
                             config.schedule = true
                         }
                     }
                     MenuItem {
-                        text: "Sunset to sunrise"
+                        //% "Sunset to sunrise"
+                        text: qsTrId("owlfish-me-sunset_sunrise")
                         onClicked: {
                             config.schedule_sun = true
                             config.schedule = true
@@ -671,14 +739,18 @@ Page {
 
             ValueButton {
                 visible: page.whenIndex === 1
-                label: "Start"
+                //: Start time
+                //% "Start"
+                label: qsTrId("owlfish-la-start")
                 value: page.formatMinutes(config.schedule_from)
                 onClicked: page.pickTime("schedule_from")
             }
 
             ValueButton {
                 visible: page.whenIndex === 1
-                label: "End"
+                //: End time
+                //% "End"
+                label: qsTrId("owlfish-la-end")
                 value: page.formatMinutes(config.schedule_to)
                 onClicked: page.pickTime("schedule_to")
             }
@@ -697,8 +769,10 @@ Page {
             // because both do not fit on one row
             TextSwitch {
                 visible: page.sunSchedule
-                text: "Set location manually"
-                description: "For sunset to sunrise: your own coordinates instead of your time zone's city."
+                //% "Set location manually"
+                text: qsTrId("owlfish-la-location_manual")
+                //% "For sunset to sunrise: your own coordinates instead of your time zone's city."
+                description: qsTrId("owlfish-la-location_manual_description")
                 checked: config.location_manual
                 automaticCheck: false
                 onClicked: page.setLocationManual(!checked)
@@ -718,17 +792,25 @@ Page {
                 // The time zone's city is in the line above
                 visible: editable
                 width: parent.width
-                label: "Coordinates"
-                placeholderText: "Latitude, longitude"
+                //% "Coordinates"
+                label: qsTrId("owlfish-la-coordinates")
+                //% "Latitude, longitude"
+                placeholderText: qsTrId("owlfish-ph-coordinates")
                 inputMethodHints: Qt.ImhNoPredictiveText | Qt.ImhNoAutoUppercase
                 errorHighlight: editable && text !== "" && !valid
                 description: {
                     if (errorHighlight)
-                        return "Not valid coordinates"
+                        //% "Not valid coordinates"
+                        return qsTrId("owlfish-la-coordinates_invalid")
                     if (config.location_manual)
-                        return "Copy them from a map app or website. They stay on this device."
-                    return page.hasAutoLocation ? "From your time zone (" + config.sun_place + ")."
-                                                : "Your time zone has no location."
+                        //% "Copy them from a map app or website. They stay on this device."
+                        return qsTrId("owlfish-la-coordinates_hint")
+                    return page.hasAutoLocation
+                            //: %1 is the time zone's city, in English
+                            //% "From your time zone (%1)."
+                            ? qsTrId("owlfish-la-coordinates_zone").arg(config.sun_place)
+                            //% "Your time zone has no location."
+                            : qsTrId("owlfish-la-zone_no_location")
                 }
 
                 onSavedTextChanged: {
@@ -748,15 +830,33 @@ Page {
             ComboBox {
                 id: transitionCombo
                 visible: config.schedule
-                label: "Gradual change"
-                description: "Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise."
+                //% "Gradual change"
+                label: qsTrId("owlfish-la-transition")
+                //% "Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise."
+                description: qsTrId("owlfish-la-transition_description")
 
                 menu: ContextMenu {
                     // Same order as page.transitionSteps
-                    MenuItem { text: "Off"; onClicked: config.schedule_transition = 0 }
-                    MenuItem { text: "30 minutes"; onClicked: config.schedule_transition = 30 }
-                    MenuItem { text: "1 hour"; onClicked: config.schedule_transition = 60 }
-                    MenuItem { text: "2 hours"; onClicked: config.schedule_transition = 120 }
+                    MenuItem {
+                        //% "Off"
+                        text: qsTrId("owlfish-me-off")
+                        onClicked: config.schedule_transition = 0
+                    }
+                    MenuItem {
+                        //% "30 minutes"
+                        text: qsTrId("owlfish-me-30_minutes")
+                        onClicked: config.schedule_transition = 30
+                    }
+                    MenuItem {
+                        //% "1 hour"
+                        text: qsTrId("owlfish-me-1_hour")
+                        onClicked: config.schedule_transition = 60
+                    }
+                    MenuItem {
+                        //% "2 hours"
+                        text: qsTrId("owlfish-me-2_hours")
+                        onClicked: config.schedule_transition = 120
+                    }
                 }
             }
 
@@ -771,17 +871,19 @@ Page {
             }
 
             SectionHeader {
-                text: "Dimming"
+                //% "Dimming"
+                text: qsTrId("owlfish-he-dimming")
             }
 
             Slider {
                 id: dimSlider
                 width: parent.width
-                label: "Darker than the current brightness"
+                //% "Darker than the current brightness"
+                label: qsTrId("owlfish-la-dim")
                 minimumValue: 0
                 maximumValue: page.maximumDim
                 stepSize: 5
-                valueText: Math.round(sliderValue) === 0 ? "Off" : Math.round(sliderValue) + " %"
+                valueText: Math.round(sliderValue) === 0 ? qsTrId("owlfish-me-off") : page.formatPercent(Math.round(sliderValue))
                 onSliderValueChanged: {
                     var dim = Math.round(sliderValue)
                     if (dim !== config.dim)
@@ -792,20 +894,21 @@ Page {
             ComboBox {
                 id: dimWhenCombo
                 visible: page.dimming
-                label: "When"
+                label: qsTrId("owlfish-la-when")
 
                 menu: ContextMenu {
                     // Same order as page.dimWhenNames
                     MenuItem {
-                        text: "All the time"
+                        text: qsTrId("owlfish-me-always")
                         onClicked: config.dim_when = "always"
                     }
                     MenuItem {
-                        text: "Fixed times"
+                        text: qsTrId("owlfish-me-fixed_times")
                         onClicked: config.dim_when = "fixed"
                     }
                     MenuItem {
-                        text: "With Night light"
+                        //% "With Night light"
+                        text: qsTrId("owlfish-me-with_night_light")
                         onClicked: config.dim_when = "night_light"
                     }
                 }
@@ -813,22 +916,24 @@ Page {
 
             ValueButton {
                 visible: page.dimming && config.dim_when === "fixed"
-                label: "Start"
+                label: qsTrId("owlfish-la-start")
                 value: page.formatMinutes(config.dim_from)
                 onClicked: page.pickTime("dim_from")
             }
 
             ValueButton {
                 visible: page.dimming && config.dim_when === "fixed"
-                label: "End"
+                label: qsTrId("owlfish-la-end")
                 value: page.formatMinutes(config.dim_to)
                 onClicked: page.pickTime("dim_to")
             }
 
             TextSwitch {
                 visible: page.dimming
-                text: "Only in the dark"
-                description: "Uses the light sensor to skip the dimming in bright light, for example outdoors or in a well-lit room, and dims again when it gets darker."
+                //% "Only in the dark"
+                text: qsTrId("owlfish-la-only_dark")
+                //% "Uses the light sensor to skip the dimming in bright light, for example outdoors or in a well-lit room, and dims again when it gets darker."
+                description: qsTrId("owlfish-la-only_dark_description")
                 checked: config.dim_cutoff
                 automaticCheck: false
                 onClicked: config.dim_cutoff = !checked
@@ -839,7 +944,8 @@ Page {
 
                 visible: page.cutoffApplies
                 width: parent.width
-                label: "Bright light starts at"
+                //% "Bright light starts at"
+                label: qsTrId("owlfish-la-threshold")
                 minimumValue: 0
                 maximumValue: page.luxSteps.length - 1
                 stepSize: 1
@@ -859,11 +965,14 @@ Page {
                 enabled: false
                 opacity: 1.0
                 width: parent.width
-                label: "Light here now"
+                //% "Light here now"
+                label: qsTrId("owlfish-la-light_now")
                 minimumValue: 0
                 maximumValue: page.luxSteps.length - 1
                 value: page.ambientLux < 0 ? 0 : page.luxPosition(page.ambientLux)
-                valueText: page.ambientLux < 0 ? "Not available"
+                //: No reading from the light sensor
+                //% "Not available"
+                valueText: page.ambientLux < 0 ? qsTrId("owlfish-la-not_available")
                                                : page.formatLux(page.roundLux(page.ambientLux))
             }
 
@@ -879,54 +988,67 @@ Page {
                 // (AmbientCutoff::ResumeRatio)
                 text: {
                     var threshold = page.luxSteps[Math.round(thresholdSlider.sliderValue)]
-                    return "Stops dimming above " + page.formatLux(threshold)
-                            + " and dims again below " + page.formatLux(threshold * 0.75) + "."
+                    //: %1 and %2 are light levels, such as "200 lux"
+                    //% "Stops dimming above %1 and dims again below %2."
+                    return qsTrId("owlfish-la-threshold_description").arg(page.formatLux(threshold))
+                            .arg(page.formatLux(threshold * 0.75))
                 }
             }
 
             SectionHeader {
-                text: "Accessibility"
+                //% "Accessibility"
+                text: qsTrId("owlfish-he-accessibility")
             }
 
             ComboBox {
                 id: correctionCombo
                 enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
-                label: "Correction"
+                //: Colour correction for colour blindness
+                //% "Correction"
+                label: qsTrId("owlfish-la-correction")
                 description: {
                     if (!page.matrixSupported)
-                        return "Not supported on this device."
+                        return qsTrId("owlfish-la-unsupported")
                     switch (page.correction) {
                     case "none":
                         return ""
                     case "greyscale":
-                        return "Shows everything in shades of grey."
+                        //% "Shows everything in shades of grey."
+                        return qsTrId("owlfish-la-greyscale_description")
                     }
                     // The Strength slider appears below, often under the
                     // screen's edge
-                    return "Makes colours you confuse easier to tell apart. Set the strength below."
+                    //% "Makes colours you confuse easier to tell apart. Set the strength below."
+                    return qsTrId("owlfish-la-correction_description")
                 }
 
                 menu: ContextMenu {
                     // Same order as page.correctionNames
                     MenuItem {
-                        text: "None"
+                        //: No colour correction
+                        //% "None"
+                        text: qsTrId("owlfish-me-none")
                         onClicked: config.correction = "none"
                     }
                     MenuItem {
-                        text: "Red-weak (protan)"
+                        //% "Red-weak (protan)"
+                        text: qsTrId("owlfish-me-protan")
                         onClicked: config.correction = "protan"
                     }
                     MenuItem {
-                        text: "Green-weak (deutan)"
+                        //% "Green-weak (deutan)"
+                        text: qsTrId("owlfish-me-deutan")
                         onClicked: config.correction = "deutan"
                     }
                     MenuItem {
-                        text: "Blue-weak (tritan)"
+                        //% "Blue-weak (tritan)"
+                        text: qsTrId("owlfish-me-tritan")
                         onClicked: config.correction = "tritan"
                     }
                     MenuItem {
-                        text: "Greyscale"
+                        //% "Greyscale"
+                        text: qsTrId("owlfish-me-greyscale")
                         onClicked: config.correction = "greyscale"
                     }
                 }
@@ -939,12 +1061,14 @@ Page {
                 enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 width: parent.width
-                label: "Strength"
+                //: How strong the colour weakness is
+                //% "Strength"
+                label: qsTrId("owlfish-la-strength")
                 // 0 changes nothing, but puts 50 % in the middle
                 minimumValue: 0
                 maximumValue: 100
                 stepSize: 5
-                valueText: Math.round(sliderValue) + " %"
+                valueText: page.formatPercent(Math.round(sliderValue))
                 onSliderValueChanged: {
                     var strength = Math.round(sliderValue)
                     if (strength !== config.correction_strength)

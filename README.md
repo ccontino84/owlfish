@@ -15,6 +15,8 @@ warmer and can make it darker than its lowest brightness, like Android's
   light sensor turns it off in bright light, for example outdoors, and back
   on when it gets darker.
 - One switch, in Settings and as a top menu shortcut.
+- In English, German, Spanish, French and Italian. A wrong or clumsy
+  translation is worth a bug report.
 
 Black stays black: the filter multiplies each colour channel, so it does not
 wash out dark areas the way an overlay app does.

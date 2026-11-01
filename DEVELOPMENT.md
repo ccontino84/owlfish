@@ -14,6 +14,7 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 | `/usr/libexec/owlfish/update-env` | writes the file above from the RPM's `%post` (see below) |
 | `/usr/share/jolla-settings/entries/owlfish.json` | registers the Settings page and the top menu shortcut |
 | `/usr/share/jolla-settings/pages/owlfish/*.qml` | Settings page and top menu shortcut |
+| `/usr/share/translations/owlfish*.qm` | the page's texts: English, German, Spanish, French, Italian |
 | `/usr/share/themes/sailfish-default/silica/z*/icons-monochrome/icon-m-owlfish.png` | icon, one per theme scale (source: `icons/icon-m-owlfish.svg`, render with `icons/render.sh`) |
 
 - **Loading:** `lipstick.service` reads `EnvironmentFile=-/var/lib/environment/compositor/*.conf`.
@@ -377,6 +378,18 @@ and mlite as 5.2.0.17.
 sfdk config target=SailfishOS-5.1.0.11-aarch64   # see: sfdk tools list
 sfdk build                                        # RPM lands in RPMS/
 ```
+
+### Translations
+
+The settings texts are `qsTrId()` ids with their English in `//%` comments
+(notes for translators in `//:`). `translations/*.ts` are compiled by
+`lrelease -idbased` (the SDK has it; host builds without it skip them) and
+named as Jolla's: `owlfish_eng_en` for English, `owlfish-<lang>` for the
+others. jolla-settings loads them through `translation_catalog` in
+`owlfish.json`. After changing a text, refresh the `.ts` files with
+`lupdate -idbased settings/*.qml -ts translations/*.ts` and translate the
+new entries. The diagnostics, the bug report and the city names stay in
+English.
 
 ## Tests
 

@@ -1,6 +1,7 @@
 # Changelog
 
 ## 1.6.0 (unreleased)
+- The settings page is now in English, German, Spanish, French and Italian, following the phone's language. Report a wrong or clumsy translation as a bug.
 - Works side by side with other home screen add-ons, such as Frogfish: Owlfish now starts through a small shared loader, so the add-ons no longer compete for the same setting.
 
 ## 1.5.0 (2026-10-17)
