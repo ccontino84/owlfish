@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: LGPL-2.1-only
 
 Name:       owlfish
-Version:    1.5.0
+Version:    1.6.0
 Release:    1
 Summary:    Warm tint and extra dimming for the display
 License:    LGPL-2.1-only
