@@ -5,13 +5,14 @@
 # here is compiled to the .qm of the same name in /usr/share/translations,
 # named as Jolla's: owlfish_eng_en is the English, owlfish-<lang>
 # its translations. The SDK has lrelease; host builds without it skip this.
+# Only the lrelease of this Qt: one found on the PATH may be another Qt's,
+# or qtchooser's wrapper for a Qt 5 lrelease that isn't installed.
 TEMPLATE = aux
 
 TS_FILES = owlfish_eng_en.ts owlfish-de.ts owlfish-es.ts owlfish-fr.ts owlfish-it.ts
 LRELEASE = $$[QT_INSTALL_BINS]/lrelease
-!exists($$LRELEASE): LRELEASE = $$system(command -v lrelease)
 
-isEmpty(LRELEASE) {
+!exists($$LRELEASE) {
     message("No lrelease: translations not built")
 } else {
     qm.input = TS_FILES

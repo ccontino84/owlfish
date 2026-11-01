@@ -68,7 +68,8 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             qtbase5-dev qtbase5-dev-tools qt5-qmake qtdeclarative5-dev libqt5sensors5-dev \
-            qml-module-qtquick2 libgl1-mesa-dri xvfb xauth make g++ dbus
+            qml-module-qtquick2 libgl1-mesa-dri xvfb xauth make g++ dbus \
+            qttools5-dev-tools
       - name: Build
         run: |
           mkdir build
