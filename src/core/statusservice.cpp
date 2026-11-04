@@ -7,6 +7,8 @@
 #include <owlfish_version.h>
 
 #include <QDBusError>
+#include <QDBusMessage>
+#include <QDBusServiceWatcher>
 
 const char *const OwlfishStatusService::ServiceName = "io.github.ccontino84.owlfish";
 const char *const OwlfishStatusService::ObjectPath = "/owlfish";
@@ -14,11 +16,19 @@ const char *const OwlfishStatusService::ObjectPath = "/owlfish";
 OwlfishStatusService::OwlfishStatusService(OwlfishController *controller)
     : QObject(controller)
     , m_controller(controller)
+    , m_previewWatcher(new QDBusServiceWatcher(this))
 {
+    m_previewWatcher->setWatchMode(QDBusServiceWatcher::WatchForUnregistration);
+    connect(m_previewWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [this](const QString &service) {
+        qCInfo(lcOwlfish) << "Preview caller" << service << "left the bus";
+        m_previewWatcher->setWatchedServices(QStringList());
+        m_controller->setPreview(QString());
+    });
 }
 
 bool OwlfishStatusService::registerOn(QDBusConnection connection)
 {
+    m_previewWatcher->setConnection(connection);
     if (!connection.registerObject(QLatin1String(ObjectPath), this, QDBusConnection::ExportAllSlots)) {
         qCWarning(lcOwlfish) << "Cannot register" << ObjectPath << "on D-Bus";
         return false;
@@ -61,4 +71,16 @@ QString OwlfishStatusService::renderer() const
 QString OwlfishStatusService::diagnostics() const
 {
     return m_controller->diagnostics();
+}
+
+bool OwlfishStatusService::preview(const QString &part)
+{
+    const bool on = m_controller->setPreview(part);
+    // The settings page may crash or be closed with a finger still down
+    QStringList watched;
+    if (on && calledFromDBus())
+        watched << message().service();
+    if (watched != m_previewWatcher->watchedServices())
+        m_previewWatcher->setWatchedServices(watched);
+    return on;
 }

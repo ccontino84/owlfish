@@ -23,9 +23,15 @@ Page {
         path: "/apps/owlfish"
 
         property bool enabled: Defaults.values.enabled
+        // At night, or all the time without a schedule
         property int temperature: Defaults.values.temperature
-        // Percent; 100 is no change, 0 grey
+        // In the day, with a schedule; the night is at least as warm
+        property int temperature_day: Defaults.values.temperature_day
+        // Percent; 100 is no change, 0 grey. At night, or all the time
+        // without a schedule.
         property int saturation: Defaults.values.saturation
+        // In the day, with a schedule; the night is at least as grey
+        property int saturation_day: Defaults.values.saturation_day
         property bool schedule: Defaults.values.schedule
         // Sunset to sunrise instead of the fixed times
         property bool schedule_sun: Defaults.values.schedule_sun
@@ -72,8 +78,14 @@ Page {
     // The sliders' and menus' values. Silica's Slider and ComboBox replace a
     // plain binding when the user moves or picks; these keep following the
     // settings (Reset to defaults, or a change from elsewhere).
+    // Warmth in 100 K steps from no tint; saturation from 100 % on the left,
+    // so that on both the right is more filter and the day is on the left
     Binding { target: warmthSlider; property: "value"; value: (page.neutralTemperature - config.temperature) / 100 }
-    Binding { target: saturationSlider; property: "value"; value: config.saturation }
+    Binding { target: saturationSlider; property: "value"; value: 100 - config.saturation }
+    Binding { target: warmthRange; property: "lowerValue"; value: (page.neutralTemperature - config.temperature_day) / 100 }
+    Binding { target: warmthRange; property: "upperValue"; value: (page.neutralTemperature - config.temperature) / 100 }
+    Binding { target: saturationRange; property: "lowerValue"; value: 100 - config.saturation_day }
+    Binding { target: saturationRange; property: "upperValue"; value: 100 - config.saturation }
     Binding { target: whenCombo; property: "currentIndex"; value: page.whenIndex }
     Binding { target: transitionCombo; property: "currentIndex"; value: Math.max(0, page.transitionSteps.indexOf(config.schedule_transition)) }
     Binding { target: dimSlider; property: "value"; value: config.dim }
@@ -87,6 +99,10 @@ Page {
     readonly property int minimumTemperature: 1900
     readonly property int maximumDim: 75
     readonly property var transitionSteps: [0, 30, 60, 120]
+    // The theme's monochrome sun and moon (since Sailfish OS 5.1), tinted
+    // like the text; the theme picks the size for the display
+    readonly property string dayIcon: "image://theme/icon-m-day"
+    readonly property string nightIcon: "image://theme/icon-m-moon"
 
     // Light levels span several orders of magnitude; step through them
     // logarithmically. A dark room is about 1 lux, a dim one 10-50, indoors
@@ -268,6 +284,67 @@ Page {
                          function() { page.checkEnvironmentFile() })
     }
 
+    // What the screen previews while a finger is on a slider (the plugin's
+    // OwlfishController::setPreview()): "day", "night", "dim" or nothing.
+    // Without a schedule the colour is the night's all the time.
+    readonly property string previewPart: {
+        if (page.status !== PageStatus.Active || !Qt.application.active)
+            return ""
+        if (warmthRange.activeHandle === "lower" || saturationRange.activeHandle === "lower")
+            return "day"
+        if (warmthRange.activeHandle === "upper" || saturationRange.activeHandle === "upper"
+                || warmthSlider.down || saturationSlider.down)
+            return "night"
+        if (dimSlider.down)
+            return "dim"
+        return ""
+    }
+    // The part the plugin shows
+    property string previewShown: ""
+
+    function sendPreview(part) {
+        plugin.typedCall("preview", [{ "type": "s", "value": part }])
+    }
+
+    // Only once a finger stays: a flick of the page through a slider
+    // previews nothing
+    onPreviewPartChanged: {
+        if (previewPart !== "") {
+            previewDelay.restart()
+        } else {
+            previewDelay.stop()
+            if (previewShown !== "") {
+                previewShown = ""
+                sendPreview("")
+            }
+        }
+    }
+
+    Timer {
+        id: previewDelay
+        interval: 250
+        onTriggered: {
+            if (page.previewPart === "" || page.previewPart === page.previewShown)
+                return
+            page.previewShown = page.previewPart
+            page.sendPreview(page.previewShown)
+        }
+    }
+
+    // The plugin ends a preview it doesn't hear about for 30 s
+    // (OwlfishController::PreviewTimeoutMs)
+    Timer {
+        interval: 10000
+        repeat: true
+        running: page.previewShown !== ""
+        onTriggered: page.sendPreview(page.previewShown)
+    }
+
+    Component.onDestruction: {
+        if (previewShown !== "")
+            sendPreview("")
+    }
+
     DBusInterface {
         id: plugin
 
@@ -308,30 +385,30 @@ Page {
         var to = config.schedule_to
         if (config.schedule_sun) {
             if (config.sun_state === "polar_day")
-                //% "Neutral all day today."
-                return qsTrId("owlfish-la-neutral_today")
+                //% "Day colours all day today."
+                return qsTrId("owlfish-la-day_today")
             if (config.sun_state === "polar_night")
-                //% "Warm all day today."
-                return qsTrId("owlfish-la-warm_today")
+                //% "Night colours all day today."
+                return qsTrId("owlfish-la-night_today")
             if (config.sun_state !== "normal")
-                //% "Neutral until sunset and sunrise are known."
-                return qsTrId("owlfish-la-neutral_until_sun")
+                //% "Day colours until sunset and sunrise are known."
+                return qsTrId("owlfish-la-day_until_sun")
             from = config.sun_set
             to = config.sun_rise
         }
         var day = 24 * 60
         var length = (to - from + day) % day
         if (length === 0)
-            //% "The start and end are the same, so the colour stays neutral."
-            return qsTrId("owlfish-la-same_times")
+            //% "The start and end are the same, so the day colours stay."
+            return qsTrId("owlfish-la-same_times_day")
         var into = (nowMinutes - from + day) % day
         if (into < length)
             //: %1 is a time of day
-            //% "Warm now; neutral from %1."
-            return qsTrId("owlfish-la-warm_now").arg(formatMinutes(to))
+            //% "Night colours now; day colours from %1."
+            return qsTrId("owlfish-la-night_now").arg(formatMinutes(to))
         //: %1 is a time of day
-        //% "Neutral now; warms up from %1."
-        return qsTrId("owlfish-la-neutral_now").arg(formatMinutes(from))
+        //% "Day colours now; night colours from %1."
+        return qsTrId("owlfish-la-day_now").arg(formatMinutes(from))
     }
 
     function formatPercent(percent) {
@@ -365,11 +442,11 @@ Page {
             //% "Your time zone has no location. Set it manually below."
             return qsTrId("owlfish-la-sun_no_location")
         case "polar_day":
-            //% "The sun doesn't set today, so the colour stays neutral."
-            return qsTrId("owlfish-la-polar_day")
+            //% "The sun doesn't set today, so the day colours stay."
+            return qsTrId("owlfish-la-polar_day_colours")
         case "polar_night":
-            //% "The sun doesn't rise today, so the colour stays warm all day."
-            return qsTrId("owlfish-la-polar_night")
+            //% "The sun doesn't rise today, so the night colours stay all day."
+            return qsTrId("owlfish-la-polar_night_colours")
         }
 
         //: %1 is the time zone's city, in English
@@ -641,6 +718,8 @@ Page {
 
             Slider {
                 id: warmthSlider
+                // With a schedule the day's and night's (warmthRange)
+                visible: !config.schedule
                 width: parent.width
                 //% "Warmth"
                 label: qsTrId("owlfish-la-warmth")
@@ -668,18 +747,43 @@ Page {
                 }
             }
 
+            RangeSlider {
+                id: warmthRange
+                visible: config.schedule
+                label: qsTrId("owlfish-la-warmth")
+                minimumValue: 0
+                maximumValue: (page.neutralTemperature - page.minimumTemperature) / 100
+                stepSize: 1
+                lowerIcon: page.dayIcon
+                upperIcon: page.nightIcon
+                lowerText: (page.neutralTemperature - Math.round(lowerValue) * 100) + " K"
+                upperText: (page.neutralTemperature - Math.round(upperValue) * 100) + " K"
+                onLowerValueChanged: {
+                    var kelvin = page.neutralTemperature - Math.round(lowerValue) * 100
+                    if (kelvin !== config.temperature_day)
+                        config.temperature_day = kelvin
+                }
+                onUpperValueChanged: {
+                    var kelvin = page.neutralTemperature - Math.round(upperValue) * 100
+                    if (kelvin !== config.temperature)
+                        config.temperature = kelvin
+                }
+            }
+
             Slider {
                 id: saturationSlider
+                visible: !config.schedule
                 enabled: page.matrixSupported
                 opacity: enabled ? 1.0 : Theme.opacityLow
                 width: parent.width
                 //% "Saturation"
                 label: qsTrId("owlfish-la-saturation")
+                // Left is no change, right is grey
                 minimumValue: 0
                 maximumValue: 100
                 stepSize: 5
                 valueText: {
-                    var saturation = Math.round(sliderValue)
+                    var saturation = 100 - Math.round(sliderValue)
                     if (saturation === 100)
                         //% "100 % · no change"
                         return qsTrId("owlfish-la-saturation_full")
@@ -689,7 +793,32 @@ Page {
                     return page.formatPercent(saturation)
                 }
                 onSliderValueChanged: {
-                    var saturation = Math.round(sliderValue)
+                    var saturation = 100 - Math.round(sliderValue)
+                    if (saturation !== config.saturation)
+                        config.saturation = saturation
+                }
+            }
+
+            RangeSlider {
+                id: saturationRange
+                visible: config.schedule
+                enabled: page.matrixSupported
+                opacity: enabled ? 1.0 : Theme.opacityLow
+                label: qsTrId("owlfish-la-saturation")
+                minimumValue: 0
+                maximumValue: 100
+                stepSize: 5
+                lowerIcon: page.dayIcon
+                upperIcon: page.nightIcon
+                lowerText: page.formatPercent(100 - Math.round(lowerValue))
+                upperText: page.formatPercent(100 - Math.round(upperValue))
+                onLowerValueChanged: {
+                    var saturation = 100 - Math.round(lowerValue)
+                    if (saturation !== config.saturation_day)
+                        config.saturation_day = saturation
+                }
+                onUpperValueChanged: {
+                    var saturation = 100 - Math.round(upperValue)
                     if (saturation !== config.saturation)
                         config.saturation = saturation
                 }
@@ -832,8 +961,8 @@ Page {
                 visible: config.schedule
                 //% "Gradual change"
                 label: qsTrId("owlfish-la-transition")
-                //% "Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise."
-                description: qsTrId("owlfish-la-transition_description")
+                //% "Changes gradually to the night colours from the start time or sunset, and is back to the day colours at the end time or sunrise."
+                description: qsTrId("owlfish-la-transition_day_night")
 
                 menu: ContextMenu {
                     // Same order as page.transitionSteps

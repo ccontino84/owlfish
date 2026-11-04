@@ -23,10 +23,10 @@ int clampDim(double value)
     return qBound(0, int(std::lround(value)), int(OwlfishSettings::MaximumDim));
 }
 
-int clampTemperature(double value)
+int clampTemperature(double value, int fallback = OwlfishSettings::DefaultTemperature)
 {
     if (!std::isfinite(value))
-        return OwlfishSettings::DefaultTemperature;
+        return fallback;
     return qBound(int(ColorTemperature::Minimum), int(std::lround(value)),
                   int(ColorTemperature::Neutral));
 }
@@ -66,10 +66,10 @@ QString normalizeRenderer(const QString &value)
     return renderer.isEmpty() ? QStringLiteral("auto") : renderer;
 }
 
-int clampSaturation(double value)
+int clampSaturation(double value, int fallback = OwlfishSettings::DefaultSaturation)
 {
     if (!std::isfinite(value))
-        return OwlfishSettings::DefaultSaturation;
+        return fallback;
     return qBound(0, int(std::lround(value)), 100);
 }
 
@@ -116,6 +116,7 @@ void OwlfishSettings::createItems()
     static const Key keys[] = {
         { &OwlfishSettings::m_enabled, "enabled" },
         { &OwlfishSettings::m_temperature, "temperature" },
+        { &OwlfishSettings::m_dayTemperature, "temperature_day" },
         { &OwlfishSettings::m_dim, "dim" },
         { &OwlfishSettings::m_cutoffEnabled, "dim_cutoff" },
         { &OwlfishSettings::m_cutoffLux, "dim_cutoff_lux" },
@@ -129,6 +130,7 @@ void OwlfishSettings::createItems()
         { &OwlfishSettings::m_longitude, "longitude" },
         { &OwlfishSettings::m_renderer, "renderer" },
         { &OwlfishSettings::m_saturation, "saturation" },
+        { &OwlfishSettings::m_daySaturation, "saturation_day" },
         { &OwlfishSettings::m_correction, "correction" },
         { &OwlfishSettings::m_correctionStrength, "correction_strength" },
         { &OwlfishSettings::m_dimWhen, "dim_when" },
@@ -160,6 +162,12 @@ bool OwlfishSettings::enabled() const
 int OwlfishSettings::temperature() const
 {
     return clampTemperature(m_temperature->value(DefaultTemperature).toDouble());
+}
+
+int OwlfishSettings::dayTemperature() const
+{
+    return clampTemperature(m_dayTemperature->value(DefaultDayTemperature).toDouble(),
+                            DefaultDayTemperature);
 }
 
 int OwlfishSettings::dim() const
@@ -227,6 +235,12 @@ int OwlfishSettings::saturation() const
     return clampSaturation(m_saturation->value(DefaultSaturation).toDouble());
 }
 
+int OwlfishSettings::daySaturation() const
+{
+    return clampSaturation(m_daySaturation->value(DefaultDaySaturation).toDouble(),
+                           DefaultDaySaturation);
+}
+
 QString OwlfishSettings::correction() const
 {
     return Correction::normalize(m_correction->value().toString());
@@ -288,6 +302,7 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     : QObject(parent)
     , m_enabled(env("enabled", 0) != 0)
     , m_temperature(clampTemperature(env("temperature", DefaultTemperature)))
+    , m_dayTemperature(clampTemperature(env("temperature_day", DefaultDayTemperature), DefaultDayTemperature))
     , m_dim(clampDim(env("dim", 0)))
     , m_cutoffEnabled(env("dim_cutoff", 1) != 0)
     , m_cutoffLux(clampLux(env("dim_cutoff_lux", DefaultCutoffLux)))
@@ -301,6 +316,7 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_longitude(checkDegrees(env("longitude", std::numeric_limits<double>::quiet_NaN()), 180))
     , m_renderer(normalizeRenderer(QString::fromLocal8Bit(qgetenv("OWLFISH_RENDERER"))))
     , m_saturation(clampSaturation(env("saturation", DefaultSaturation)))
+    , m_daySaturation(clampSaturation(env("saturation_day", DefaultDaySaturation), DefaultDaySaturation))
     , m_correction(Correction::normalize(QString::fromLocal8Bit(qgetenv("OWLFISH_CORRECTION"))))
     , m_correctionStrength(clampCorrectionStrength(env("correction_strength", DefaultCorrectionStrength)))
     , m_dimWhen(normalizeDimWhen(QString::fromLocal8Bit(qgetenv("OWLFISH_DIM_WHEN"))))
@@ -323,6 +339,11 @@ bool OwlfishSettings::enabled() const
 int OwlfishSettings::temperature() const
 {
     return m_temperature;
+}
+
+int OwlfishSettings::dayTemperature() const
+{
+    return m_dayTemperature;
 }
 
 int OwlfishSettings::dim() const
@@ -390,6 +411,11 @@ int OwlfishSettings::saturation() const
     return m_saturation;
 }
 
+int OwlfishSettings::daySaturation() const
+{
+    return m_daySaturation;
+}
+
 QString OwlfishSettings::correction() const
 {
     return m_correction;
@@ -443,6 +469,34 @@ void OwlfishSettings::setRenderer(const QString &renderer)
 void OwlfishSettings::setSaturation(int saturation)
 {
     m_saturation = clampSaturation(saturation);
+    emit changed();
+}
+
+void OwlfishSettings::setTemperature(int temperature)
+{
+    m_temperature = clampTemperature(temperature);
+    emit changed();
+}
+
+void OwlfishSettings::setDayValues(int temperature, int saturation)
+{
+    m_dayTemperature = clampTemperature(temperature, DefaultDayTemperature);
+    m_daySaturation = clampSaturation(saturation, DefaultDaySaturation);
+    emit changed();
+}
+
+void OwlfishSettings::setScheduled(bool scheduled, int from, int to, int transition)
+{
+    m_scheduled = scheduled;
+    m_scheduleFrom = clampMinuteOfDay(from, DefaultFrom);
+    m_scheduleTo = clampMinuteOfDay(to, DefaultTo);
+    m_scheduleTransition = clampTransition(transition);
+    emit changed();
+}
+
+void OwlfishSettings::setDim(int dim)
+{
+    m_dim = clampDim(dim);
     emit changed();
 }
 

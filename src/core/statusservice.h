@@ -5,7 +5,10 @@
 #define OWLFISH_STATUSSERVICE_H
 
 #include <QDBusConnection>
+#include <QDBusContext>
 #include <QObject>
+
+class QDBusServiceWatcher;
 
 class OwlfishController;
 
@@ -13,7 +16,7 @@ class OwlfishController;
 // compositor. No reply means it is not loaded. From a terminal:
 //   dbus-send --session --print-reply --dest=io.github.ccontino84.owlfish
 //             /owlfish io.github.ccontino84.owlfish.status
-class OwlfishStatusService : public QObject
+class OwlfishStatusService : public QObject, protected QDBusContext
 {
     Q_OBJECT
     Q_CLASSINFO("D-Bus Interface", "io.github.ccontino84.owlfish")
@@ -39,9 +42,16 @@ public slots:
     QString renderer() const;
     // OwlfishController::diagnostics(), for support
     QString diagnostics() const;
+    // OwlfishController::setPreview(): "day", "night" or "dim" while a
+    // finger is on a slider, "" when it lifts. Called again while dragging,
+    // which keeps it from timing out. It also ends when the caller leaves
+    // the bus.
+    bool preview(const QString &part);
 
 private:
     OwlfishController *m_controller;
+    // The caller of the preview on, if over D-Bus
+    QDBusServiceWatcher *m_previewWatcher;
 };
 
 #endif

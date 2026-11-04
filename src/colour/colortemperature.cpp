@@ -83,16 +83,22 @@ QVector3D gain(qreal requested)
     return QVector3D(rgb[0], rgb[1], rgb[2]);
 }
 
+qreal between(qreal fromKelvin, qreal toKelvin, qreal strength)
+{
+    fromKelvin = qBound<qreal>(Minimum, fromKelvin, Neutral);
+    toKelvin = qBound<qreal>(Minimum, toKelvin, Neutral);
+    if (strength <= 0)
+        return fromKelvin;
+    if (strength >= 1)
+        return toKelvin;
+    const qreal from = 1e6 / fromKelvin;
+    const qreal to = 1e6 / toKelvin;
+    return 1e6 / (from + (to - from) * strength);
+}
+
 qreal partial(qreal targetKelvin, qreal strength)
 {
-    if (strength <= 0)
-        return Neutral;
-    targetKelvin = qBound<qreal>(Minimum, targetKelvin, Neutral);
-    if (strength >= 1)
-        return targetKelvin;
-    const qreal neutral = 1e6 / Neutral;
-    const qreal target = 1e6 / targetKelvin;
-    return 1e6 / (neutral + (target - neutral) * strength);
+    return between(Neutral, targetKelvin, strength);
 }
 
 }

@@ -18,10 +18,18 @@ class MDConfItem;
 // User settings under dconf /apps/owlfish/:
 //   enabled              bool, default false: master switch
 //   temperature          kelvin, 1900 (no blue left) to 6500 (no tint),
-//                        default 4500
+//                        default 4500; at night, or all the time without
+//                        a schedule
+//   temperature_day      the same in the day (with a schedule), default
+//                        6500
 //   saturation           percent, 0 (grey) to 100 (no change), default 100;
-//                        with the colour, so it follows the schedule
-//                        (bedtime); display hardware or fetch only
+//                        at night, or all the time without a schedule;
+//                        display hardware or fetch only
+//   saturation_day       the same in the day (with a schedule), default 100
+//                        The schedule fades between the day and night
+//                        values. The settings page keeps the night at least
+//                        as warm and as grey as the day; the plugin fades
+//                        between whatever is set.
 //   dim                  extra dimming in percent, 0 to MaximumDim, default 0
 //   dim_when             when the dimming applies: "always" (default),
 //                        "fixed" (dim_from to dim_to, no transition) or
@@ -79,6 +87,8 @@ public:
     // turn the filter off again
     static const int MaximumDim = 75;
     static const int DefaultTemperature = 4500;
+    // No tint
+    static const int DefaultDayTemperature = 6500;
     static const int DefaultCutoffLux = 1000;
     // Brighter is direct sun
     static const int MinimumCutoffLux = 1;
@@ -88,13 +98,17 @@ public:
     static const int DefaultTransition = 60;
     static const int MaximumTransition = 120;
     static const int DefaultSaturation = 100;
+    static const int DefaultDaySaturation = 100;
     // For protan and deutan the severity (Correction::matrix())
     static const int DefaultCorrectionStrength = 50;
 
     explicit OwlfishSettings(QObject *parent = nullptr);
 
     bool enabled() const;
+    // At night, or all the time without a schedule
     int temperature() const;
+    // In the day, with a schedule
+    int dayTemperature() const;
     int dim() const;
     bool cutoffEnabled() const;
     int cutoffLux() const;
@@ -109,8 +123,10 @@ public:
     double longitude() const;
     // The renderer key, lower case; "auto" if not set
     QString renderer() const;
-    // Percent
+    // Percent; at night, or all the time without a schedule
     int saturation() const;
+    // Percent; in the day, with a schedule
+    int daySaturation() const;
     // Correction::normalize()d
     QString correction() const;
     // Percent
@@ -135,6 +151,10 @@ public:
     void setEnabled(bool enabled);
     void setRenderer(const QString &renderer);
     void setSaturation(int saturation);
+    void setTemperature(int temperature);
+    void setDayValues(int temperature, int saturation);
+    void setScheduled(bool scheduled, int from, int to, int transition = 0);
+    void setDim(int dim);
     void setCorrection(const QString &correction, int strength = DefaultCorrectionStrength);
     void setDimWhen(const QString &when);
 #endif
@@ -148,6 +168,7 @@ private:
 
     MDConfItem *m_enabled = nullptr;
     MDConfItem *m_temperature = nullptr;
+    MDConfItem *m_dayTemperature = nullptr;
     MDConfItem *m_dim = nullptr;
     MDConfItem *m_cutoffEnabled = nullptr;
     MDConfItem *m_cutoffLux = nullptr;
@@ -161,6 +182,7 @@ private:
     MDConfItem *m_longitude = nullptr;
     MDConfItem *m_renderer = nullptr;
     MDConfItem *m_saturation = nullptr;
+    MDConfItem *m_daySaturation = nullptr;
     MDConfItem *m_correction = nullptr;
     MDConfItem *m_correctionStrength = nullptr;
     MDConfItem *m_dimWhen = nullptr;
@@ -170,6 +192,7 @@ private:
 #else
     bool m_enabled;
     int m_temperature;
+    int m_dayTemperature;
     int m_dim;
     bool m_cutoffEnabled;
     int m_cutoffLux;
@@ -183,6 +206,7 @@ private:
     double m_longitude;
     QString m_renderer;
     int m_saturation;
+    int m_daySaturation;
     QString m_correction;
     int m_correctionStrength;
     QString m_dimWhen;

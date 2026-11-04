@@ -44,8 +44,15 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
   instead of the device losing its plugins.
 - **Status:** the plugin registers `io.github.ccontino84.owlfish` on the
   session bus, with `status()` (`active`, `starting`, `no-window`,
-  `crash-guard`), `version()`, `resetCrashGuard()`, `renderer()` and
-  `diagnostics()` (see below). The settings page
+  `crash-guard`), `version()`, `resetCrashGuard()`, `renderer()`,
+  `diagnostics()` (see below) and `preview(part)`. While a finger rests on
+  a slider the page calls `preview("day")`, `"night"` or `"dim"` (after
+  250 ms, so a flick of the page through a slider previews nothing, and
+  again every 10 s), and `preview("")` when it lifts: the plugin shows that
+  part at full strength, whatever the schedule, the light sensor or the
+  Enabled switch, and the rest as it is (`OwlfishController::setPreview()`).
+  It ends by itself 30 s after the last call, when the display turns off,
+  and when the caller leaves the bus (`QDBusServiceWatcher`). The settings page
   asks once when it opens and shows the running version under its title.
   A double tap on its header opens a hidden page with `diagnostics()` and a
   Copy button, for support (without a reply, the page writes the status it
@@ -91,7 +98,7 @@ Source layout:
 | `src/output/qualcomm/` | `qualcommoutput.*` (the output); `qualcommclient.*` (the client of the Qualcomm helper on the system bus) |
 | `qualcomm-helper/` | `qualcomm-helper`, the system service that sets Qualcomm's display colour matrix (`helper.*`, `qdcm.*`, `main.cpp`, `system/`); packaged as `owlfish-qualcomm` |
 | `config/` | `update-env`: run by the RPM's `%post` |
-| `settings/` | the settings page (QML) |
+| `settings/` | the settings page (QML; `RangeSlider.qml`: the two-handle slider for the day and night values) |
 | `tests/` | host tests (QtTest) |
 
 A new kind of display hardware is a new folder under `src/output/` with a
@@ -108,13 +115,17 @@ values. This matches redshift's table to within 0.0015. Blue reaches 0 at
 exactly 1900 K. Dimming multiplies all channels by the same factor; the
 final gain is tint × dimming.
 
-During a gradual change the colour moves in even steps of mireds between no
-tint and the chosen warmth.
+With a schedule the colour has a day value and a night value
+(`temperature_day` and `temperature`, `saturation_day` and `saturation`);
+outside the window the day's apply (by default no tint and no change),
+inside it the night's, and during a gradual change the colour moves in even
+steps of mireds between the two (`ColorTemperature::between()`). Without a
+schedule the night's apply all the time.
 
 The saturation (`ColorMatrix::saturation`) mixes each colour with the grey
 of the same Rec. 709 luminance, in linear light. It follows the colour's
 schedule like the warmth: at a strength `t` of the schedule the factor is
-`1 − t · (1 − saturation)`. Desaturating comes first and the tint after, so
+`day + t · (night − day)`. Desaturating comes first and the tint after, so
 a bedtime screen is a warm grey:
 `diag(linearGain(tint × dim)) · saturation`. Only the display hardware and
 `fetch` can mix channels. Blending only multiplies each channel, so with
@@ -344,8 +355,10 @@ the same factor (logged at startup, and published as
 
 ```sh
 dconf write /apps/owlfish/enabled true           # default false
-dconf write /apps/owlfish/temperature 3400       # kelvin, 1900-6500, default 4500
-dconf write /apps/owlfish/saturation 40          # percent, 0 (grey)-100, default 100; display hardware or fetch
+dconf write /apps/owlfish/temperature 3400       # kelvin, 1900-6500, default 4500; at night, or always without a schedule
+dconf write /apps/owlfish/temperature_day 5500   # the day's, with a schedule, default 6500
+dconf write /apps/owlfish/saturation 40          # percent, 0 (grey)-100, default 100; display hardware or fetch; at night, or always
+dconf write /apps/owlfish/saturation_day 80      # the day's, with a schedule, default 100
 dconf write /apps/owlfish/correction "'deutan'"  # none (default), protan, deutan, tritan or greyscale; display hardware or fetch
 dconf write /apps/owlfish/correction_strength 50 # percent, 0-100, default 50; not for greyscale
 dconf write /apps/owlfish/dim 50                 # percent, 0-75, default 0
@@ -417,7 +430,8 @@ reads only zeros through it in desktop GL and fails them, Mesa 26 works,
 so the release workflow tests in an Ubuntu 26.04 container). They also
 cover the colour gains against redshift's table,
 tint and dimming combined, the schedule (window, transitions, only the
-colour), sunset and sunrise against USNO reference values, the time zone
+colour), the day and night values, the preview (each part, while switched
+off, ended by the display and by the caller leaving the bus), sunset and sunrise against USNO reference values, the time zone
 lookup (links, aliases, zone.tab), the ambient light cut-off, the crash
 guard, the D-Bus status, `update-env` against sample environment files,
 the display hardware with a fake PQ service (fixed point, device list,

@@ -73,11 +73,27 @@ public:
     AmbientCutoff *cutoff() const { return m_cutoff; }
     OwlfishSettings *settings() const { return m_settings; }
 
-    // Warm tint, colourStrength of the way from neutral to the temperature,
-    // times the dimming
-    static QVector3D filterGain(qreal colourStrength, int temperature, qreal dimPercent);
-    // The saturation factor, colourStrength of the way from 1 to the setting
-    static qreal saturationFactor(qreal colourStrength, int saturationPercent);
+    // What a preview shows (setPreview())
+    enum Preview { NoPreview, PreviewDay, PreviewNight, PreviewDim };
+
+    // For the settings page, while a finger is on a slider: "day" or "night"
+    // shows that time of day's colour, "dim" the dimming, whatever the
+    // schedule, the light sensor or the Enabled switch say; everything else
+    // stays as it is. An empty string (or anything else) ends it. It also
+    // ends by itself PreviewTimeoutMs after the last call, and when the
+    // display turns off. Returns whether a preview is on.
+    bool setPreview(const QString &part);
+    Preview preview() const { return m_preview; }
+    static const int PreviewTimeoutMs = 30000;
+
+    // Warm tint, colourStrength of the way from the day's temperature to the
+    // night's, times the dimming
+    static QVector3D filterGain(qreal colourStrength, int dayTemperature, int nightTemperature,
+                                qreal dimPercent);
+    // The saturation factor, colourStrength of the way from the day's
+    // setting to the night's
+    static qreal saturationFactor(qreal colourStrength, int daySaturationPercent,
+                                  int nightSaturationPercent);
     // 1 without a schedule; with one, following it and its transitions
     static qreal colourStrength(bool scheduled, const OwlfishSchedule &schedule,
                                 const QDateTime &now);
@@ -101,9 +117,9 @@ private slots:
 private:
     // The active output can apply the correction and the saturation
     bool matrixSupported() const;
-    // The correction, then Night light's saturation, where they can be
-    // applied; the identity otherwise
-    QMatrix3x3 colourMatrix(qreal colourStrength) const;
+    // The correction (if corrected), then Night light's saturation, where
+    // they can be applied; the identity otherwise
+    QMatrix3x3 colourMatrix(qreal saturation, bool corrected) const;
     void attach(QQuickWindow *window);
     void updateLightSensor();
     // The light level sensorfw already has, for the cut-off
@@ -144,6 +160,9 @@ private:
     int m_findAttempts;
     QTimer m_healthyTimer;
     QTimer m_scheduleTimer;
+    Preview m_preview;
+    // Ends a preview the page forgot to end
+    QTimer m_previewTimer;
     bool m_displayOn;
     QPointer<QQuickWindow> m_window;
     QVariantAnimation m_animation;

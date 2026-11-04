@@ -21,6 +21,7 @@ INSTALLS += update_env
 settings_entries.files = settings/owlfish.json
 settings_entries.path = /usr/share/jolla-settings/entries
 settings_pages.files = settings/OwlfishPage.qml settings/DiagnosticsPage.qml settings/EnableSwitch.qml \
+    settings/RangeSlider.qml \
     settings/defaults.js
 settings_pages.path = /usr/share/jolla-settings/pages/owlfish
 INSTALLS += settings_entries settings_pages

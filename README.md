@@ -7,7 +7,8 @@ warmer and can make it darker than its lowest brightness, like Android's
 - **Night light**: warmth from no tint (6500 K) down to no blue at all
   (1900 K), all the time, between fixed times, or from sunset to sunrise,
   with a gradual change at the start and end. Less saturation, down to
-  grey, for bedtime.
+  grey, for bedtime. With a schedule, a day value and a night value for
+  each, for example a slight warmth all day and a strong one at night.
 - **Colour correction** for red-, green- or blue-weak vision, or greyscale,
   all day.
 - **Dimming** on top of the current brightness, by up to 75 %, all the time,
@@ -91,13 +92,19 @@ wrong](#if-something-goes-wrong)).
   (tap to toggle, long press to open the page).
 - **Night light**
   - **Warmth**: 6500 K (no tint) to 1900 K (no blue), default 4500 K.
-  - **Saturation**: 100 % (no change) down to 0 % (grey), for bedtime. On
-    devices other than the Jolla Phone it needs a graphics processor that
-    supports it (most do); otherwise it is disabled.
+  - **Saturation**: 100 % (no change, on the left) down to 0 % (grey), for
+    bedtime. On devices other than the Jolla Phone it needs a graphics
+    processor that supports it (most do); otherwise it is disabled.
   - **When**: *All the time*, *Fixed times* (default 21:00-07:00) or
-    *Sunset to sunrise*; neutral the rest of the day. **Gradual change**
-    (off, 30 min, 1 h, 2 h) warms up from the start and is back to neutral
-    at the end. Warmth and saturation follow it together.
+    *Sunset to sunrise*. With a schedule, Warmth and Saturation have two
+    handles: the day's (sun, left; default no change) and the night's
+    (moon, right). They can't cross: the night is always at least as warm
+    and as grey as the day. **Gradual change** (off, 30 min, 1 h, 2 h)
+    moves from the day's values to the night's from the start, and is back
+    at the day's at the end. Warmth and saturation follow it together.
+  - **Preview**: while a finger rests on a handle, the screen shows that
+    value (the day's or the night's colours, or the dimming), whatever the
+    time, the light sensor or the Enabled switch, until the finger lifts.
 - **Dimming**
   - **Darker than the current brightness**: off, or 5-75 %.
   - **When**: *All the time* (default), *Fixed times* (its own) or *With

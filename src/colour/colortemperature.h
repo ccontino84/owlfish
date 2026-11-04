@@ -18,8 +18,11 @@ const int Minimum = 1900;
 // Minimum..Neutral.
 QVector3D gain(qreal kelvin);
 
-// The temperature a fraction of the way from neutral to the target, even
-// in mireds (perceptually closer to uniform than kelvin)
+// The temperature a fraction of the way from one temperature to another,
+// even in mireds (perceptually closer to uniform than kelvin); both clamped
+// to Minimum..Neutral
+qreal between(qreal fromKelvin, qreal toKelvin, qreal strength);
+// The same from neutral
 qreal partial(qreal targetKelvin, qreal strength);
 
 }

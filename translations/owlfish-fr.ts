@@ -25,31 +25,31 @@
         <source>Warm whenever Owlfish is enabled.</source>
         <translation>Couleurs chaudes dès qu'Owlfish est activé.</translation>
     </message>
-    <message id="owlfish-la-neutral_today">
-        <source>Neutral all day today.</source>
-        <translation>Couleurs neutres toute la journée aujourd'hui.</translation>
+    <message id="owlfish-la-day_today">
+        <source>Day colours all day today.</source>
+        <translation>Couleurs de jour toute la journée aujourd'hui.</translation>
     </message>
-    <message id="owlfish-la-warm_today">
-        <source>Warm all day today.</source>
-        <translation>Couleurs chaudes toute la journée aujourd'hui.</translation>
+    <message id="owlfish-la-night_today">
+        <source>Night colours all day today.</source>
+        <translation>Couleurs de nuit toute la journée aujourd'hui.</translation>
     </message>
-    <message id="owlfish-la-neutral_until_sun">
-        <source>Neutral until sunset and sunrise are known.</source>
-        <translation>Neutre tant que le coucher et le lever du soleil ne sont pas connus.</translation>
+    <message id="owlfish-la-day_until_sun">
+        <source>Day colours until sunset and sunrise are known.</source>
+        <translation>Couleurs de jour tant que le coucher et le lever du soleil ne sont pas connus.</translation>
     </message>
-    <message id="owlfish-la-same_times">
-        <source>The start and end are the same, so the colour stays neutral.</source>
-        <translation>Le début et la fin sont identiques, la couleur reste donc neutre.</translation>
+    <message id="owlfish-la-same_times_day">
+        <source>The start and end are the same, so the day colours stay.</source>
+        <translation>Le début et la fin sont identiques, les couleurs de jour restent donc.</translation>
     </message>
-    <message id="owlfish-la-warm_now">
-        <source>Warm now; neutral from %1.</source>
+    <message id="owlfish-la-night_now">
+        <source>Night colours now; day colours from %1.</source>
         <extracomment>%1 is a time of day</extracomment>
-        <translation>Couleurs chaudes maintenant ; neutres à partir de %1.</translation>
+        <translation>Couleurs de nuit maintenant ; couleurs de jour à partir de %1.</translation>
     </message>
-    <message id="owlfish-la-neutral_now">
-        <source>Neutral now; warms up from %1.</source>
+    <message id="owlfish-la-day_now">
+        <source>Day colours now; night colours from %1.</source>
         <extracomment>%1 is a time of day</extracomment>
-        <translation>Couleurs neutres maintenant ; chaudes à partir de %1.</translation>
+        <translation>Couleurs de jour maintenant ; couleurs de nuit à partir de %1.</translation>
     </message>
     <message id="owlfish-la-percent">
         <source>%1 %</source>
@@ -79,13 +79,13 @@
         <source>Your time zone has no location. Set it manually below.</source>
         <translation>Votre fuseau horaire n'a pas de position. Définissez-la manuellement ci-dessous.</translation>
     </message>
-    <message id="owlfish-la-polar_day">
-        <source>The sun doesn't set today, so the colour stays neutral.</source>
-        <translation>Le soleil ne se couche pas aujourd'hui, la couleur reste donc neutre.</translation>
+    <message id="owlfish-la-polar_day_colours">
+        <source>The sun doesn't set today, so the day colours stay.</source>
+        <translation>Le soleil ne se couche pas aujourd'hui, les couleurs de jour restent donc.</translation>
     </message>
-    <message id="owlfish-la-polar_night">
-        <source>The sun doesn't rise today, so the colour stays warm all day.</source>
-        <translation>Le soleil ne se lève pas aujourd'hui, la couleur reste donc chaude toute la journée.</translation>
+    <message id="owlfish-la-polar_night_colours">
+        <source>The sun doesn't rise today, so the night colours stay all day.</source>
+        <translation>Le soleil ne se lève pas aujourd'hui, les couleurs de nuit restent donc toute la journée.</translation>
     </message>
     <message id="owlfish-la-zone_city">
         <source>%1, from your time zone</source>
@@ -244,9 +244,9 @@
         <source>Gradual change</source>
         <translation>Transition progressive</translation>
     </message>
-    <message id="owlfish-la-transition_description">
-        <source>Warms up gradually from the start time or sunset, and is back to neutral at the end time or sunrise.</source>
-        <translation>Les couleurs deviennent chaudes progressivement à partir de l'heure de début ou du coucher du soleil, et redeviennent neutres à l'heure de fin ou au lever du soleil.</translation>
+    <message id="owlfish-la-transition_day_night">
+        <source>Changes gradually to the night colours from the start time or sunset, and is back to the day colours at the end time or sunrise.</source>
+        <translation>Passe progressivement aux couleurs de nuit à partir de l'heure de début ou du coucher du soleil, et revient aux couleurs de jour à l'heure de fin ou au lever du soleil.</translation>
     </message>
     <message id="owlfish-me-off">
         <source>Off</source>

@@ -9,7 +9,9 @@
 var values = {
     enabled: false,
     temperature: 4500,
+    temperature_day: 6500,
     saturation: 100,
+    saturation_day: 100,
     schedule: false,
     schedule_sun: false,
     schedule_from: 1260,

@@ -25,6 +25,8 @@
 #include <QDBusInterface>
 #include <QDBusMetaType>
 #include <QDBusPendingCall>
+#include <QDBusPendingReply>
+#include <QElapsedTimer>
 #include <QDBusReply>
 #include <QGenericPluginFactory>
 #include <QProcess>
@@ -525,6 +527,9 @@ private slots:
     void correctionWithBlend();
     void correctionThroughFetch();
     void saturationAfterCorrection();
+    void dayValues();
+    void preview();
+    void previewOnDBus();
     void dimmingWhen_data();
     void dimmingWhen();
     void rendererFallback();
@@ -840,19 +845,30 @@ void tst_Owlfish::filterGain()
     const QVector3D warm = ColorTemperature::gain(3400);
 
     // Neutral colour, no dimming: nothing to do
-    QCOMPARE(OwlfishController::filterGain(1, 6500, 0), QVector3D(1, 1, 1));
-    QCOMPARE(OwlfishController::filterGain(0, 3400, 0), QVector3D(1, 1, 1));
+    QCOMPARE(OwlfishController::filterGain(1, 6500, 6500, 0), QVector3D(1, 1, 1));
+    QCOMPARE(OwlfishController::filterGain(0, 6500, 3400, 0), QVector3D(1, 1, 1));
     // Only dimming
-    QCOMPARE(OwlfishController::filterGain(1, 6500, 50), QVector3D(0.5f, 0.5f, 0.5f));
-    QCOMPARE(OwlfishController::filterGain(0, 3400, 50), QVector3D(0.5f, 0.5f, 0.5f));
+    QCOMPARE(OwlfishController::filterGain(1, 6500, 6500, 50), QVector3D(0.5f, 0.5f, 0.5f));
+    QCOMPARE(OwlfishController::filterGain(0, 6500, 3400, 50), QVector3D(0.5f, 0.5f, 0.5f));
     // Never below 25% brightness
-    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(1, 6500, 100), QVector3D(0.25f, 0.25f, 0.25f)));
+    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(1, 6500, 6500, 100), QVector3D(0.25f, 0.25f, 0.25f)));
     // Tint times dimming
-    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(1, 3400, 50), warm * 0.5f));
+    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(1, 6500, 3400, 50), warm * 0.5f));
     // Halfway through a colour transition: half the tint (in mireds), the
     // dimming unaffected
-    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(0.5, 3400, 50),
+    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(0.5, 6500, 3400, 50),
                           ColorTemperature::gain(ColorTemperature::partial(3400, 0.5)) * 0.5f));
+
+    // With a warm day: the day's tint in the day, the night's at night, in
+    // mireds between them
+    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(0, 5500, 3400, 0), ColorTemperature::gain(5500)));
+    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(1, 5500, 3400, 0), warm));
+    const qreal halfway = 1e6 / ((1e6 / 5500 + 1e6 / 3400) / 2);
+    QVERIFY(qAbs(ColorTemperature::between(5500, 3400, 0.5) - halfway) < 0.01);
+    QVERIFY(qFuzzyCompare(OwlfishController::filterGain(0.5, 5500, 3400, 0), ColorTemperature::gain(halfway)));
+    // Clamped like partial()
+    QCOMPARE(ColorTemperature::between(9000, 1000, 0), qreal(6500));
+    QCOMPARE(ColorTemperature::between(9000, 1000, 1), qreal(1900));
 }
 
 void tst_Owlfish::temperatureGain_data()
@@ -1728,11 +1744,15 @@ void tst_Owlfish::saturationMatrix()
     }
 
     // With the colour: the schedule's strength of the way to the setting
-    QCOMPARE(OwlfishController::saturationFactor(1, 100), 1.0);
-    QCOMPARE(OwlfishController::saturationFactor(1, 0), 0.0);
-    QCOMPARE(OwlfishController::saturationFactor(0.5, 0), 0.5);
-    QCOMPARE(OwlfishController::saturationFactor(0, 40), 1.0);
-    QVERIFY(qFuzzyCompare(OwlfishController::saturationFactor(1, 40), 0.4));
+    QCOMPARE(OwlfishController::saturationFactor(1, 100, 100), 1.0);
+    QCOMPARE(OwlfishController::saturationFactor(1, 100, 0), 0.0);
+    QCOMPARE(OwlfishController::saturationFactor(0.5, 100, 0), 0.5);
+    QCOMPARE(OwlfishController::saturationFactor(0, 100, 40), 1.0);
+    QVERIFY(qFuzzyCompare(OwlfishController::saturationFactor(1, 100, 40), 0.4));
+    // From the day's saturation to the night's
+    QVERIFY(qFuzzyCompare(OwlfishController::saturationFactor(0, 80, 40), 0.8));
+    QVERIFY(qFuzzyCompare(OwlfishController::saturationFactor(0.5, 80, 40), 0.6));
+    QVERIFY(qFuzzyCompare(OwlfishController::saturationFactor(1, 80, 40), 0.4));
 }
 
 void tst_Owlfish::saturationThroughPq()
@@ -2068,6 +2088,177 @@ void tst_Owlfish::saturationAfterCorrection()
     controller->settings()->setCorrection(QStringLiteral("greyscale"));
     QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(grey, gain)));
     QVERIFY(maxDifference(ColorMatrix::saturation(0.4) * grey, grey) < 1e-6f);
+}
+
+void tst_Owlfish::dayValues()
+{
+    // A schedule that starts in an hour: the day's warmth and saturation now
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_TEMPERATURE", "3400");
+    qputenv("OWLFISH_DIM", "0");
+    qputenv("OWLFISH_SATURATION", "40");
+    qputenv("OWLFISH_TEMPERATURE_DAY", "5500");
+    qputenv("OWLFISH_SATURATION_DAY", "80");
+    qputenv("OWLFISH_SCHEDULE", "1");
+    qputenv("OWLFISH_SCHEDULE_FROM", QByteArray::number(minutesFromNow(60)));
+    qputenv("OWLFISH_SCHEDULE_TO", QByteArray::number(minutesFromNow(120)));
+    qputenv("OWLFISH_SCHEDULE_TRANSITION", "0");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    for (const char *name : { "OWLFISH_SATURATION", "OWLFISH_TEMPERATURE_DAY", "OWLFISH_SATURATION_DAY",
+                              "OWLFISH_SCHEDULE", "OWLFISH_SCHEDULE_FROM", "OWLFISH_SCHEDULE_TO",
+                              "OWLFISH_SCHEDULE_TRANSITION" })
+        qunsetenv(name);
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+
+    const QMatrix3x3 day = ColorMatrix::withGain(ColorMatrix::saturation(0.8), ColorTemperature::gain(5500));
+    const QMatrix3x3 night = ColorMatrix::withGain(ColorMatrix::saturation(0.4), ColorTemperature::gain(3400));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(day));
+    const QStringList lines = controller->diagnostics().split(QLatin1Char('\n'));
+    QVERIFY(lines.contains(QStringLiteral("warmth 3400 K, day 5500 K")));
+    QVERIFY(lines.contains(QStringLiteral("saturation 40 %, day 80 %")));
+
+    // In the window: the night's
+    controller->settings()->setScheduled(true, minutesFromNow(-60), minutesFromNow(60));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(night));
+
+    // Without a schedule the night's all the time; the day's are unused
+    controller->settings()->setScheduled(false, minutesFromNow(60), minutesFromNow(120));
+    controller->settings()->setDayValues(6500, 100);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(night));
+    controller->settings()->setScheduled(true, minutesFromNow(60), minutesFromNow(120));
+    // The defaults: neutral in the day, as before 1.7
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    QVERIFY(controller->diagnostics().split(QLatin1Char('\n')).contains(QStringLiteral("saturation 40 %")));
+}
+
+void tst_Owlfish::preview()
+{
+    // Switched off, with a schedule whose window starts in an hour and a
+    // correction
+    qputenv("OWLFISH_ENABLED", "0");
+    qputenv("OWLFISH_TEMPERATURE", "3400");
+    qputenv("OWLFISH_DIM", "50");
+    qputenv("OWLFISH_SATURATION", "40");
+    qputenv("OWLFISH_TEMPERATURE_DAY", "5500");
+    qputenv("OWLFISH_SATURATION_DAY", "80");
+    qputenv("OWLFISH_SCHEDULE", "1");
+    qputenv("OWLFISH_SCHEDULE_FROM", QByteArray::number(minutesFromNow(60)));
+    qputenv("OWLFISH_SCHEDULE_TO", QByteArray::number(minutesFromNow(120)));
+    qputenv("OWLFISH_SCHEDULE_TRANSITION", "0");
+    qputenv("OWLFISH_CORRECTION", "protan");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    for (const char *name : { "OWLFISH_SATURATION", "OWLFISH_TEMPERATURE_DAY", "OWLFISH_SATURATION_DAY",
+                              "OWLFISH_SCHEDULE", "OWLFISH_SCHEDULE_FROM", "OWLFISH_SCHEDULE_TO",
+                              "OWLFISH_SCHEDULE_TRANSITION", "OWLFISH_CORRECTION" })
+        qunsetenv(name);
+    qputenv("OWLFISH_ENABLED", "1");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+    QCOMPARE(controller->preview(), OwlfishController::NoPreview);
+
+    // Each preview shows its part alone: no correction or dimming while
+    // switched off, and the schedule doesn't matter
+    const QMatrix3x3 correction = Correction::matrix(QStringLiteral("protan"), 0.5);
+    QVERIFY(controller->setPreview(QStringLiteral("night")));
+    QCOMPARE(controller->preview(), OwlfishController::PreviewNight);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            ColorMatrix::saturation(0.4), ColorTemperature::gain(3400))));
+    QVERIFY(controller->diagnostics().endsWith(QStringLiteral("\npreview night"))
+            || controller->diagnostics().contains(QStringLiteral("\npreview night\n")));
+    QVERIFY(controller->setPreview(QStringLiteral("day")));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            ColorMatrix::saturation(0.8), ColorTemperature::gain(5500))));
+    QVERIFY(controller->setPreview(QStringLiteral("dim")));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixFor(QVector3D(0.5f, 0.5f, 0.5f)));
+    // Ended: off again
+    QVERIFY(!controller->setPreview(QString()));
+    QCOMPARE(controller->preview(), OwlfishController::NoPreview);
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    QVERIFY(!controller->diagnostics().contains(QStringLiteral("preview")));
+
+    // Switched on, in the day: the rest stays as it is
+    controller->settings()->setEnabled(true);
+    const QVector3D dim(0.5f, 0.5f, 0.5f);
+    const QMatrix3x3 day = ColorMatrix::withGain(ColorMatrix::saturation(0.8) * correction,
+                                                 ColorTemperature::gain(5500) * dim);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(day));
+    QVERIFY(controller->setPreview(QStringLiteral("night")));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            ColorMatrix::saturation(0.4) * correction, ColorTemperature::gain(3400) * dim)));
+    // A change while previewing shows at once
+    controller->settings()->setTemperature(2700);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(ColorMatrix::withGain(
+            ColorMatrix::saturation(0.4) * correction, ColorTemperature::gain(2700) * dim)));
+
+    // The display turning off ends it
+    QVERIFY(QMetaObject::invokeMethod(controller.data(), "displayStatusChanged",
+                                      Q_ARG(QString, QStringLiteral("off"))));
+    QCOMPARE(controller->preview(), OwlfishController::NoPreview);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(day));
+    QVERIFY(QMetaObject::invokeMethod(controller.data(), "displayStatusChanged",
+                                      Q_ARG(QString, QStringLiteral("on"))));
+
+    // Unknown parts end it too
+    QVERIFY(controller->setPreview(QStringLiteral("dim")));
+    QVERIFY(!controller->setPreview(QStringLiteral("dusk")));
+    QCOMPARE(controller->preview(), OwlfishController::NoPreview);
+}
+
+void tst_Owlfish::previewOnDBus()
+{
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.isConnected())
+        QSKIP("No session bus");
+
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(new OwlfishController(
+            "QQuickView", dir.filePath(QStringLiteral("unhealthy-starts"))));
+    OwlfishStatusService *service = new OwlfishStatusService(controller.data());
+    QVERIFY(service->registerOn(bus));
+
+    // The settings page is another process: another connection
+    const QString pageName = QStringLiteral("owlfish-test-page");
+    {
+        QDBusConnection page = QDBusConnection::connectToBus(QDBusConnection::SessionBus, pageName);
+        QVERIFY(page.isConnected());
+        QDBusInterface remote(QLatin1String(OwlfishStatusService::ServiceName),
+                              QLatin1String(OwlfishStatusService::ObjectPath),
+                              QStringLiteral("io.github.ccontino84.owlfish"), page);
+        // The service runs in this thread: asynchronous calls, so it can
+        // answer while the test waits
+        auto call = [&remote](const QString &part) {
+            QDBusPendingReply<bool> reply = remote.asyncCall(QStringLiteral("preview"), part);
+            QElapsedTimer timer;
+            timer.start();
+            while (!reply.isFinished() && timer.elapsed() < 5000)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            return reply;
+        };
+        QDBusPendingReply<bool> reply = call(QStringLiteral("night"));
+        QVERIFY2(reply.isValid(), qPrintable(reply.error().message()));
+        QVERIFY(reply.value());
+        QCOMPARE(controller->preview(), OwlfishController::PreviewNight);
+        reply = call(QString());
+        QVERIFY(reply.isValid());
+        QVERIFY(!reply.value());
+        QCOMPARE(controller->preview(), OwlfishController::NoPreview);
+        reply = call(QStringLiteral("dim"));
+        QVERIFY(reply.isValid());
+        QVERIFY(reply.value());
+        QCOMPARE(controller->preview(), OwlfishController::PreviewDim);
+    }
+    // The page goes away with a finger still down: the preview ends
+    QDBusConnection::disconnectFromBus(pageName);
+    QTRY_COMPARE(controller->preview(), OwlfishController::NoPreview);
+
+    bus.unregisterService(QLatin1String(OwlfishStatusService::ServiceName));
 }
 
 void tst_Owlfish::dimmingWhen_data()

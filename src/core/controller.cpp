@@ -80,6 +80,7 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     , m_alsMultiplier(1.0)
     , m_luxQuery(0)
     , m_findAttempts(0)
+    , m_preview(NoPreview)
     , m_displayOn(true)
     , m_gain(1, 1, 1)
     , m_hwReleasePath(QLatin1String(DeviceInfo::HwReleasePath))
@@ -125,6 +126,10 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     m_scheduleTimer.setInterval(ScheduleIntervalMs);
     connect(&m_scheduleTimer, &QTimer::timeout, this, &OwlfishController::scheduleTick);
 
+    m_previewTimer.setSingleShot(true);
+    m_previewTimer.setInterval(PreviewTimeoutMs);
+    connect(&m_previewTimer, &QTimer::timeout, this, [this]() { setPreview(QString()); });
+
     // Constructed while QGuiApplication itself is being set up; look for the
     // window once the event loop runs
     m_findTimer.setInterval(FindIntervalMs);
@@ -156,18 +161,41 @@ void OwlfishController::connectOutput(FilterOutput *output)
     connect(output, &FilterOutput::failed, this, &OwlfishController::outputFailed);
 }
 
-QVector3D OwlfishController::filterGain(qreal colourStrength, int temperature, qreal dimPercent)
+QVector3D OwlfishController::filterGain(qreal colourStrength, int dayTemperature,
+                                        int nightTemperature, qreal dimPercent)
 {
-    const QVector3D tint = ColorTemperature::gain(ColorTemperature::partial(temperature, colourStrength));
+    const QVector3D tint = ColorTemperature::gain(
+            ColorTemperature::between(dayTemperature, nightTemperature, colourStrength));
     // double: qreal is float on 32-bit ARM
     const float dim = float(qBound(0.0, double(dimPercent), double(OwlfishSettings::MaximumDim)) / 100);
     return tint * (1 - dim);
 }
 
-qreal OwlfishController::saturationFactor(qreal colourStrength, int saturationPercent)
+qreal OwlfishController::saturationFactor(qreal colourStrength, int daySaturationPercent,
+                                          int nightSaturationPercent)
 {
     const double strength = qBound(0.0, double(colourStrength), 1.0);
-    return qreal(1 - strength * (1 - qBound(0, saturationPercent, 100) / 100.0));
+    const double day = qBound(0, daySaturationPercent, 100) / 100.0;
+    const double night = qBound(0, nightSaturationPercent, 100) / 100.0;
+    return qreal(day + strength * (night - day));
+}
+
+bool OwlfishController::setPreview(const QString &part)
+{
+    const Preview preview = part == QLatin1String("day") ? PreviewDay
+                          : part == QLatin1String("night") ? PreviewNight
+                          : part == QLatin1String("dim") ? PreviewDim
+                          : NoPreview;
+    if (preview == NoPreview)
+        m_previewTimer.stop();
+    else
+        m_previewTimer.start();
+    if (preview != m_preview) {
+        m_preview = preview;
+        qCInfo(lcOwlfish) << "Preview" << (preview == NoPreview ? "off" : qPrintable(part));
+        updateGain(SettingsFadeMs);
+    }
+    return m_preview != NoPreview;
 }
 
 qreal OwlfishController::colourStrength(bool scheduled, const OwlfishSchedule &schedule,
@@ -224,9 +252,17 @@ QString OwlfishController::diagnostics() const
                 line += QStringLiteral(", not supported by this renderer");
         }
         lines << line;
+        lines << (m_settings->scheduled()
+                  ? QStringLiteral("warmth %1 K, day %2 K").arg(m_settings->temperature())
+                    .arg(m_settings->dayTemperature())
+                  : QStringLiteral("warmth %1 K").arg(m_settings->temperature()));
         QString saturation = QStringLiteral("saturation %1 %").arg(m_settings->saturation());
+        // Only in use with a schedule
+        const bool daySaturation = m_settings->scheduled() && m_settings->daySaturation() < 100;
+        if (daySaturation)
+            saturation += QStringLiteral(", day %1 %").arg(m_settings->daySaturation());
         // Only the display hardware and Fetch mix the channels
-        if (m_settings->saturation() < 100 && !matrixSupported())
+        if ((m_settings->saturation() < 100 || daySaturation) && !matrixSupported())
             saturation += QStringLiteral(", not supported by this renderer");
         lines << saturation;
         const QString when = m_settings->dimWhen();
@@ -235,6 +271,10 @@ QString OwlfishController::diagnostics() const
                     .arg(QTime(0, 0).addSecs(m_settings->dimFrom() * 60).toString(QStringLiteral("HH:mm")),
                          QTime(0, 0).addSecs(m_settings->dimTo() * 60).toString(QStringLiteral("HH:mm")))
                   : QStringLiteral("dimming when %1").arg(when));
+        if (m_preview != NoPreview)
+            lines << QStringLiteral("preview %1").arg(m_preview == PreviewDay ? QStringLiteral("day")
+                                                      : m_preview == PreviewNight ? QStringLiteral("night")
+                                                      : QStringLiteral("dim"));
     }
     if (m_gpu)
         lines << m_gpu->diagnostics();
@@ -246,14 +286,16 @@ bool OwlfishController::matrixSupported() const
     return m_output && m_output->supportsMatrix();
 }
 
-QMatrix3x3 OwlfishController::colourMatrix(qreal colourStrength) const
+QMatrix3x3 OwlfishController::colourMatrix(qreal saturation, bool corrected) const
 {
     if (!matrixSupported())
         return QMatrix3x3();
     // Desaturated after the correction, so a grey bedtime keeps the
     // correction's lightness cues; tinted last (filterGain())
-    return ColorMatrix::saturation(saturationFactor(colourStrength, m_settings->saturation()))
-            * Correction::matrix(m_settings->correction(), m_settings->correctionStrength() / 100.0);
+    const QMatrix3x3 desaturate = ColorMatrix::saturation(saturation);
+    if (!corrected)
+        return desaturate;
+    return desaturate * Correction::matrix(m_settings->correction(), m_settings->correctionStrength() / 100.0);
 }
 
 void OwlfishController::findWindow()
@@ -333,12 +375,14 @@ void OwlfishController::applySettings()
 
     qCInfo(lcOwlfish) << "enabled" << m_settings->enabled()
                         << "temperature" << m_settings->temperature() << "K"
+                        << "day" << m_settings->dayTemperature() << "K"
                         << "dim" << m_settings->dim() << "%"
                         << "cutoff" << m_settings->cutoffEnabled() << m_settings->cutoffLux() << "lux"
                         << "schedule" << m_settings->scheduled() << m_settings->scheduleFrom()
                         << m_settings->scheduleTo() << m_settings->scheduleTransition()
                         << "sun" << m_settings->scheduleSun() << "manual location" << m_settings->locationManual()
                         << "saturation" << m_settings->saturation() << "%"
+                        << "day" << m_settings->daySaturation() << "%"
                         << "dim when" << qPrintable(m_settings->dimWhen()) << m_settings->dimFrom() << m_settings->dimTo()
                         << "renderer" << qPrintable(renderer())
                         << "correction" << qPrintable(m_settings->correction()) << m_settings->correctionStrength() << "%";
@@ -508,6 +552,9 @@ void OwlfishController::displayStatusChanged(const QString &status)
     if (on == m_displayOn)
         return;
     m_displayOn = on;
+    // Nobody is looking at a preview
+    if (!on)
+        setPreview(QString());
     updateScheduleTimer();
     if (on && m_gpu)
         scheduleTick();
@@ -518,17 +565,48 @@ void OwlfishController::updateGain(int fadeMs)
     if (!m_gpu)
         return;
 
-    if (!m_settings->enabled()) {
+    const bool enabled = m_settings->enabled();
+    if (!enabled && m_preview == NoPreview) {
         fadeTo(QVector3D(1, 1, 1), QMatrix3x3(), fadeMs);
         return;
     }
 
+    // What applies now (nothing while switched off)
     const QDateTime now = QDateTime::currentDateTime();
-    const qreal colour = currentColourStrength(now);
-    const bool dimSuspended = m_settings->cutoffEnabled() && m_cutoff->isBright();
-    const qreal dim = dimSuspended ? 0 : m_settings->dim() * currentDimStrength(now);
-    // Corrected and desaturated first, then tinted: a warm grey at bedtime
-    fadeTo(filterGain(colour, m_settings->temperature(), dim), colourMatrix(colour), fadeMs);
+    bool colourOn = enabled;
+    qreal colour = enabled ? currentColourStrength(now) : 0;
+    qreal dim = 0;
+    if (enabled) {
+        const bool dimSuspended = m_settings->cutoffEnabled() && m_cutoff->isBright();
+        dim = dimSuspended ? 0 : m_settings->dim() * currentDimStrength(now);
+    }
+    // A preview replaces one part of it
+    switch (m_preview) {
+    case PreviewDay:
+        colourOn = true;
+        colour = 0;
+        break;
+    case PreviewNight:
+        colourOn = true;
+        colour = 1;
+        break;
+    case PreviewDim:
+        dim = m_settings->dim();
+        break;
+    case NoPreview:
+        break;
+    }
+
+    if (!colourOn) {
+        fadeTo(filterGain(1, ColorTemperature::Neutral, ColorTemperature::Neutral, dim), QMatrix3x3(), fadeMs);
+        return;
+    }
+    // Corrected and desaturated first, then tinted: a warm grey at bedtime.
+    // The correction only while enabled.
+    fadeTo(filterGain(colour, m_settings->dayTemperature(), m_settings->temperature(), dim),
+           colourMatrix(saturationFactor(colour, m_settings->daySaturation(), m_settings->saturation()),
+                        enabled),
+           fadeMs);
 }
 
 void OwlfishController::updateRenderer()
