@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.7.0 (unreleased)
+## 1.7.0 (2026-11-04)
 - Night light with a schedule now has a day value and a night value for Warmth and Saturation: each slider gets two handles, the day's (sun) on the left and the night's (moon) on the right, and the colour changes gradually between them. For example, a slight warmth all day and a strong one at night. The day values start at no change, so nothing changes until you move them.
 - Saturation now runs from 100 % on the left to grey on the right, like Warmth: on both sliders, further right means more filter.
 - Preview: while your finger rests on a Warmth, Saturation or Dimming slider, the screen shows that value now, whatever the time, the light or the Enabled switch, and goes back when you let go.
