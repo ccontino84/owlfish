@@ -3,6 +3,8 @@
 
 #include "alscalibration.h"
 #include "ambientcutoff.h"
+#include "applist.h"
+#include "appmatcher.h"
 #include "colorfilteritem.h"
 #include "colormatrix.h"
 #include "colortemperature.h"
@@ -11,6 +13,7 @@
 #include "mediatekoutput.h"
 #include "qualcommoutput.h"
 #include "crashguard.h"
+#include "frontapp.h"
 #include <owlfish_version.h>
 #include "pqdisplay.h"
 #include "schedule.h"
@@ -551,6 +554,12 @@ private slots:
     void gpuFallback();
     void updateEnv_data();
     void updateEnv();
+    void exceptionExec_data();
+    void exceptionExec();
+    void exceptionDesktopKeys();
+    void exceptionWindowKeys();
+    void exceptionPause();
+    void exceptionAppList();
     void cutoffFirstReadingAppliesImmediately();
     void cutoffHysteresis();
     void cutoffThresholdChangeAppliesAtOnce();
@@ -3707,6 +3716,242 @@ void tst_Owlfish::qualcommNotInstalled()
     QCOMPARE(pqLog.connects, 0);
     controller.reset();
     QCOMPARE(log.resets, 0);
+}
+
+void tst_Owlfish::exceptionExec_data()
+{
+    QTest::addColumn<QString>("exec");
+    QTest::addColumn<QString>("program");
+
+    QTest::newRow("plain") << "/usr/bin/jolla-notes" << "jolla-notes";
+    QTest::newRow("invoker") << "invoker --type=silica-media --single-instance jolla-camera" << "jolla-camera";
+    QTest::newRow("invoker -t") << "/usr/bin/invoker -s -t silica-qt5 /usr/bin/harbour-rawfish %U" << "harbour-rawfish";
+    QTest::newRow("sailjail") << "/usr/bin/sailjail -p harbour-books.desktop /usr/bin/harbour-books" << "harbour-books";
+    QTest::newRow("sailjail and invoker")
+            << "sailjail -p harbour-x.desktop -- invoker --type=generic -d 5 /usr/bin/harbour-x" << "harbour-x";
+    QTest::newRow("qml only") << "sailfish-qml harbour-qmlapp" << "harbour-qmlapp";
+    QTest::newRow("python") << "env LANG=C python3 \"/usr/share/my app/main.py\" %f" << "main";
+    QTest::newRow("quoted") << "\"/opt/my apps/viewer\" --fullscreen" << "viewer";
+    QTest::newRow("empty") << "" << "";
+    QTest::newRow("only a wrapper") << "invoker --type=generic" << "";
+}
+
+void tst_Owlfish::exceptionExec()
+{
+    QFETCH(QString, exec);
+    QFETCH(QString, program);
+    QCOMPARE(AppMatcher::execProgram(exec), program);
+}
+
+void tst_Owlfish::exceptionDesktopKeys()
+{
+    QTemporaryDir user;
+    QTemporaryDir system;
+    QVERIFY(user.isValid() && system.isValid());
+    auto write = [](const QString &path, const QByteArray &text) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(text) == text.size();
+    };
+    QVERIFY(write(system.filePath("jolla-camera.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Camera\nName[de]=Kamera\n"
+                  "Exec=invoker --type=silica-media --single-instance jolla-camera\n"
+                  "[X-Sailjail]\nExec=/usr/bin/other\n"));
+    QVERIFY(write(user.filePath("apkd_launcher_com_example.desktop"),
+                  "[Desktop Entry]\nName=Example\n"
+                  "Exec=apkd-launcher -i defaultuser com.example.apk com.example/com.example.Main\n"
+                  "X-apkd-packageName=com.example\n"));
+    // The user's entry hides the system's of the same name
+    QVERIFY(write(system.filePath("apkd_launcher_com_example.desktop"), "[Desktop Entry]\nExec=/usr/bin/wrong\n"));
+    QVERIFY(write(system.filePath("harbour-qmlapp.desktop"),
+                  "[Desktop Entry]\nExec=/usr/bin/sailjail -p harbour-qmlapp.desktop sailfish-qml harbour-qmlapp\n"));
+
+    const QStringList dirs = { user.path(), system.path() };
+    QCOMPARE(AppMatcher::findDesktopFile(QStringLiteral("jolla-camera.desktop"), dirs),
+             system.filePath("jolla-camera.desktop"));
+    QCOMPARE(AppMatcher::findDesktopFile(QStringLiteral("apkd_launcher_com_example.desktop"), dirs),
+             user.filePath("apkd_launcher_com_example.desktop"));
+    QVERIFY(AppMatcher::findDesktopFile(QStringLiteral("missing.desktop"), dirs).isEmpty());
+    // Only file names
+    QVERIFY(AppMatcher::findDesktopFile(QStringLiteral("../") + QFileInfo(system.path()).fileName()
+                                        + QStringLiteral("/jolla-camera.desktop"), dirs).isEmpty());
+    QVERIFY(AppMatcher::findDesktopFile(QString(), dirs).isEmpty());
+
+    QCOMPARE(AppMatcher::desktopKeys(system.filePath("jolla-camera.desktop")),
+             QStringList({ "jolla-camera" }));
+    // Android: only the package
+    QCOMPARE(AppMatcher::desktopKeys(user.filePath("apkd_launcher_com_example.desktop")),
+             QStringList({ "com.example" }));
+    QCOMPARE(AppMatcher::desktopKeys(system.filePath("harbour-qmlapp.desktop")),
+             QStringList({ "harbour-qmlapp" }));
+    QVERIFY(AppMatcher::desktopKeys(system.filePath("missing.desktop")).isEmpty());
+}
+
+void tst_Owlfish::exceptionWindowKeys()
+{
+    QTemporaryDir proc;
+    QVERIFY(proc.isValid());
+    auto process = [&](qint64 pid, const QString &exe, const QByteArray &cmdline, const QByteArray &comm) {
+        const QString dir = proc.filePath(QString::number(pid));
+        if (!QDir().mkpath(dir))
+            return false;
+        if (!exe.isEmpty() && !QFile::link(exe, dir + QStringLiteral("/exe")))
+            return false;
+        QFile args(dir + QStringLiteral("/cmdline"));
+        QFile name(dir + QStringLiteral("/comm"));
+        return args.open(QIODevice::WriteOnly) && args.write(cmdline) == cmdline.size()
+                && name.open(QIODevice::WriteOnly) && name.write(comm + '\n') == comm.size() + 1;
+    };
+    // A boosted app: exe is the booster
+    QVERIFY(process(100, "/usr/libexec/mapplauncherd/booster-silica-media",
+                    QByteArray("/usr/bin/jolla-camera\0", 22), "jolla-camera"));
+    // An app that rewrote its arguments
+    QVERIFY(process(200, "/usr/bin/harbour-books", QByteArray("/\0sr\0bin\0harbour-books\0", 23), "harbour-books"));
+    // A QML-only app, and a long name cut short in comm
+    QVERIFY(process(300, "/usr/bin/sailfish-qml", QByteArray("sailfish-qml\0harbour-qmlapp\0", 28), "sailfish-qml"));
+    QVERIFY(process(400, QString(), QByteArray(), "harbour-rawfish"));
+    // The Android bridge, for all Android windows
+    QVERIFY(process(500, "/usr/libexec/mapplauncherd/booster-qt5",
+                    QByteArray("/usr/libexec/appsupport/apkd-bridge\0defaultuser\0", 48), "apkd-bridge"));
+
+    const QString root = proc.path();
+    QCOMPARE(AppMatcher::windowKeys(100, QString(), root), QStringList({ "jolla-camera" }));
+    QCOMPARE(AppMatcher::windowKeys(200, QString(), root), QStringList({ "harbour-books" }));
+    QCOMPARE(AppMatcher::windowKeys(300, QString(), root), QStringList({ "sailfish-qml", "harbour-qmlapp" }));
+    QCOMPARE(AppMatcher::windowKeys(500, QStringLiteral("com.example"), root),
+             QStringList({ "com.example", "apkd-bridge" }));
+    QCOMPARE(AppMatcher::windowKeys(0, QString(), root), QStringList());
+    QCOMPARE(AppMatcher::windowKeys(999, QStringLiteral("viewer"), root), QStringList({ "viewer" }));
+
+    const QSet<QString> keys = { "jolla-camera", "harbour-rawfisher", "com.example" };
+    QVERIFY(AppMatcher::matches(AppMatcher::windowKeys(100, QString(), root), keys));
+    QVERIFY(!AppMatcher::matches(AppMatcher::windowKeys(200, QString(), root), keys));
+    // comm keeps 15 characters
+    QVERIFY(AppMatcher::matches(AppMatcher::windowKeys(400, QString(), root), keys));
+    QVERIFY(AppMatcher::matches(AppMatcher::windowKeys(500, QStringLiteral("com.example"), root), keys));
+    QVERIFY(!AppMatcher::matches(AppMatcher::windowKeys(500, QStringLiteral("com.other"), root), keys));
+    QVERIFY(!AppMatcher::matches(QStringList(), keys));
+}
+
+void tst_Owlfish::exceptionPause()
+{
+    // Nothing left from other tests
+    for (const QString &variable : QProcess::systemEnvironment()) {
+        if (variable.startsWith(QLatin1String("OWLFISH_")))
+            qunsetenv(variable.section(QLatin1Char('='), 0, 0).toLocal8Bit().constData());
+    }
+    qputenv("OWLFISH_ENABLED", "1");
+    qputenv("OWLFISH_DIM", "50");
+    PqLog log;
+    QTemporaryDir dir;
+    QScopedPointer<OwlfishController> controller(createPqController(dir, new FakePq(&log)));
+    qunsetenv("OWLFISH_DIM");
+    QScopedPointer<QQuickView> view(createView());
+    QVERIFY(view);
+    QTRY_COMPARE(controller->renderer(), QStringLiteral("pq"));
+    const QMatrix3x3 on = ColorMatrix::withGain(QMatrix3x3(), ColorTemperature::gain(4500) * 0.5f);
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(on));
+    QVERIFY(controller->frontApp());
+    QVERIFY(!controller->isPaused());
+
+    QTemporaryDir apps;
+    QVERIFY(apps.isValid());
+    QFile entry(apps.filePath("jolla-camera.desktop"));
+    QVERIFY(entry.open(QIODevice::WriteOnly));
+    entry.write("[Desktop Entry]\nExec=invoker --type=silica-media jolla-camera\n");
+    entry.close();
+    controller->frontApp()->setDesktopDirs({ apps.path() });
+
+    // An app in front that is no exception yet
+    controller->frontApp()->setFrontKeys({ "jolla-camera" });
+    QVERIFY(!controller->isPaused());
+    controller->settings()->setExceptions({ "jolla-camera.desktop", "missing.desktop" });
+    QCOMPARE(controller->frontApp()->exceptionCount(), 1);
+    QVERIFY(controller->isPaused());
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nexceptions 1 of 2, paused")));
+
+    // A preview still shows over a paused app
+    QVERIFY(controller->setPreview(QStringLiteral("dim")));
+    QTRY_COMPARE(log.matrices.last(), pqMatrixFor(QVector3D(0.5f, 0.5f, 0.5f)));
+    QVERIFY(!controller->setPreview(QString()));
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+
+    // Another app in front, then home: back on
+    controller->frontApp()->setFrontKeys({ "harbour-books" });
+    QVERIFY(!controller->isPaused());
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(on));
+    controller->frontApp()->setFrontKeys({ "jolla-camera" });
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    controller->frontApp()->setFrontKeys(QStringList());
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(on));
+    QVERIFY(controller->diagnostics().contains(QStringLiteral("\nexceptions 1 of 2\n")));
+
+    // Removed from the list while in front
+    controller->frontApp()->setFrontKeys({ "jolla-camera" });
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    controller->settings()->setExceptions(QStringList());
+    QVERIFY(!controller->isPaused());
+    QTRY_COMPARE(log.matrices.last(), pqMatrixOf(on));
+
+    // Switched off, nothing changes
+    controller->settings()->setExceptions({ "jolla-camera.desktop" });
+    controller->settings()->setEnabled(false);
+    QTRY_COMPARE(log.matrices.last(), PqIdentity);
+    controller->frontApp()->setFrontKeys(QStringList());
+    QVERIFY(!controller->isPaused());
+    QTest::qWait(600);
+    QCOMPARE(log.matrices.last(), PqIdentity);
+    qunsetenv("OWLFISH_ENABLED");
+}
+
+void tst_Owlfish::exceptionAppList()
+{
+    QTemporaryDir user;
+    QTemporaryDir system;
+    QTemporaryDir icons;
+    QVERIFY(user.isValid() && system.isValid() && icons.isValid());
+    auto write = [](const QString &path, const QByteArray &text) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(text) == text.size();
+    };
+    QVERIFY(write(system.filePath("jolla-camera.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Camera\nIcon=icon-launcher-camera\nExec=jolla-camera\n"));
+    QVERIFY(write(system.filePath("hidden.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Hidden\nNoDisplay=true\nExec=x\n"));
+    QVERIFY(write(system.filePath("other-ui.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Other\nNotShowIn=X-MeeGo;\nExec=x\n"));
+    QVERIFY(write(system.filePath("link.desktop"), "[Desktop Entry]\nType=Link\nName=Link\nURL=https://x\n"));
+    QVERIFY(write(system.filePath("readme.txt"), "[Desktop Entry]\nType=Application\nName=Text\n"));
+    QVERIFY(write(system.filePath("apkd_launcher_com_example.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Old\nExec=x\n"));
+    QVERIFY(write(user.filePath("apkd_launcher_com_example.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Example\nIcon=/home/u/icon.png\nExec=apkd-launcher\n"
+                  "X-apkd-packageName=com.example\n"));
+    QVERIFY(write(system.filePath("harbour-books.desktop"),
+                  "[Desktop Entry]\nType=Application\nName=Books\nIcon=harbour-books\nExec=harbour-books\n"));
+    QVERIFY(write(icons.filePath("harbour-books.png"), "png"));
+
+    QCOMPARE(AppList::iconUrl(QStringLiteral("harbour-books"), { icons.path() }),
+             QStringLiteral("file://") + icons.filePath("harbour-books.png"));
+    QCOMPARE(AppList::iconUrl(QStringLiteral("icon-launcher-camera"), { icons.path() }),
+             QStringLiteral("image://theme/icon-launcher-camera"));
+    QCOMPARE(AppList::iconUrl(QStringLiteral("/home/u/icon.png")), QStringLiteral("file:///home/u/icon.png"));
+    QCOMPARE(AppList::iconUrl(QString()), QString());
+
+    AppList list({ user.path(), system.path() });
+    const QStringList apps = list.apps();
+    QCOMPARE(apps.size() % 4, 0);
+    QStringList ids;
+    for (int i = 0; i < apps.size(); i += 4)
+        ids << apps.at(i);
+    // Sorted by name; the user's entry hides the system's
+    QCOMPARE(ids, QStringList({ "harbour-books.desktop", "jolla-camera.desktop", "apkd_launcher_com_example.desktop" }));
+    const int example = ids.indexOf(QStringLiteral("apkd_launcher_com_example.desktop")) * 4;
+    QCOMPARE(apps.mid(example, 4),
+             QStringList({ "apkd_launcher_com_example.desktop", "Example", "file:///home/u/icon.png", "android" }));
+    QCOMPARE(apps.mid(4, 4), QStringList({ "jolla-camera.desktop", "Camera", "image://theme/icon-launcher-camera", "" }));
+    // Cached while nothing changes
+    QCOMPARE(list.apps(), apps);
 }
 
 QTEST_MAIN(tst_Owlfish)

@@ -136,6 +136,7 @@ void OwlfishSettings::createItems()
         { &OwlfishSettings::m_dimWhen, "dim_when" },
         { &OwlfishSettings::m_dimFrom, "dim_from" },
         { &OwlfishSettings::m_dimTo, "dim_to" },
+        { &OwlfishSettings::m_exceptions, "exceptions" },
     };
     for (const Key &key : keys) {
         MDConfItem *&item = this->*key.item;
@@ -266,6 +267,11 @@ int OwlfishSettings::dimTo() const
     return clampMinuteOfDay(m_dimTo->value(DefaultTo).toDouble(), DefaultTo);
 }
 
+QStringList OwlfishSettings::exceptions() const
+{
+    return m_exceptions->value().toStringList();
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
     publish(QStringLiteral("als_multiplier"), multiplier);
@@ -322,7 +328,9 @@ OwlfishSettings::OwlfishSettings(QObject *parent)
     , m_dimWhen(normalizeDimWhen(QString::fromLocal8Bit(qgetenv("OWLFISH_DIM_WHEN"))))
     , m_dimFrom(clampMinuteOfDay(env("dim_from", DefaultFrom), DefaultFrom))
     , m_dimTo(clampMinuteOfDay(env("dim_to", DefaultTo), DefaultTo))
+    , m_exceptions(QString::fromLocal8Bit(qgetenv("OWLFISH_EXCEPTIONS")).split(QLatin1Char(';')))
 {
+    m_exceptions.removeAll(QString());
 }
 
 void OwlfishSettings::reload()
@@ -441,6 +449,11 @@ int OwlfishSettings::dimTo() const
     return m_dimTo;
 }
 
+QStringList OwlfishSettings::exceptions() const
+{
+    return m_exceptions;
+}
+
 void OwlfishSettings::publishAlsMultiplier(double multiplier)
 {
     publish(QStringLiteral("als_multiplier"), multiplier);
@@ -510,6 +523,12 @@ void OwlfishSettings::setCorrection(const QString &correction, int strength)
 void OwlfishSettings::setDimWhen(const QString &when)
 {
     m_dimWhen = normalizeDimWhen(when);
+    emit changed();
+}
+
+void OwlfishSettings::setExceptions(const QStringList &exceptions)
+{
+    m_exceptions = exceptions;
     emit changed();
 }
 

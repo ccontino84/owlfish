@@ -5,6 +5,7 @@
 #define OWLFISH_SETTINGS_H
 
 #include <QObject>
+#include <QStringList>
 #include <QVariant>
 
 #ifdef HAVE_MLITE
@@ -56,6 +57,9 @@ class MDConfItem;
 //                        fetch only
 //   correction_strength  percent, 0 (no change) to 100, default 50; not
 //                        for greyscale
+//   exceptions           string list, default empty: launcher entries
+//                        ("jolla-camera.desktop"); while one of their apps
+//                        is in front the filter fades out (FrontApp)
 // Not on the settings page, for troubleshooting:
 //   renderer             "auto" (default): the display hardware where it is
 //                        detected and works, the GPU elsewhere (fetch, or
@@ -135,6 +139,8 @@ public:
     QString dimWhen() const;
     int dimFrom() const;
     int dimTo() const;
+    // Launcher entry file names
+    QStringList exceptions() const;
 
     void publishAlsMultiplier(double multiplier);
     // Reads every setting again and forgets what the plugin wrote, so that
@@ -157,6 +163,7 @@ public:
     void setDim(int dim);
     void setCorrection(const QString &correction, int strength = DefaultCorrectionStrength);
     void setDimWhen(const QString &when);
+    void setExceptions(const QStringList &exceptions);
 #endif
 
 signals:
@@ -188,6 +195,7 @@ private:
     MDConfItem *m_dimWhen = nullptr;
     MDConfItem *m_dimFrom = nullptr;
     MDConfItem *m_dimTo = nullptr;
+    MDConfItem *m_exceptions = nullptr;
     QHash<QString, MDConfItem *> m_publishedItems;
 #else
     bool m_enabled;
@@ -212,6 +220,7 @@ private:
     QString m_dimWhen;
     int m_dimFrom;
     int m_dimTo;
+    QStringList m_exceptions;
     QVariantMap m_published;
 #endif
 };

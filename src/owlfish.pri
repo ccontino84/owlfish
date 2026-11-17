@@ -7,9 +7,10 @@
 #   colour    colour maths: matrices, temperature, corrections
 #   schedule  the night's times: fixed, sunset to sunrise, time zone city
 #   sensor    the ambient light cut-off
+#   exceptions  the apps in front of which the filter pauses
 #   output    where the filter is applied: the GPU, or the display hardware
 #             (MediaTek's PQ service, Qualcomm's QDCM through the helper)
-OWLFISH_DIRS = core colour schedule sensor output output/gpu output/mediatek output/qualcomm
+OWLFISH_DIRS = core exceptions colour schedule sensor output output/gpu output/mediatek output/qualcomm
 INCLUDEPATH += $$PWD
 for(dir, OWLFISH_DIRS): INCLUDEPATH += $$PWD/$$dir
 
@@ -25,6 +26,9 @@ HEADERS += \
     $$PWD/core/logging.h \
     $$PWD/core/settings.h \
     $$PWD/core/statusservice.h \
+    $$PWD/exceptions/applist.h \
+    $$PWD/exceptions/appmatcher.h \
+    $$PWD/exceptions/frontapp.h \
     $$PWD/colour/colormatrix.h \
     $$PWD/colour/colortemperature.h \
     $$PWD/colour/correction.h \
@@ -49,6 +53,9 @@ SOURCES += \
     $$PWD/core/logging.cpp \
     $$PWD/core/settings.cpp \
     $$PWD/core/statusservice.cpp \
+    $$PWD/exceptions/applist.cpp \
+    $$PWD/exceptions/appmatcher.cpp \
+    $$PWD/exceptions/frontapp.cpp \
     $$PWD/colour/colormatrix.cpp \
     $$PWD/colour/colortemperature.cpp \
     $$PWD/colour/correction.cpp \

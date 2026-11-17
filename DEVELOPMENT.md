@@ -45,7 +45,8 @@ compositor scene: `out = pixel × gain` per channel, so black stays black.
 - **Status:** the plugin registers `io.github.ccontino84.owlfish` on the
   session bus, with `status()` (`active`, `starting`, `no-window`,
   `crash-guard`), `version()`, `resetCrashGuard()`, `renderer()`,
-  `diagnostics()` (see below) and `preview(part)`. While a finger rests on
+  `diagnostics()` (see below), `apps()` (the launcher's apps for the
+  Exceptions, four strings each) and `preview(part)`. While a finger rests on
   a slider the page calls `preview("day")`, `"night"` or `"dim"` (after
   250 ms, so a flick of the page through a slider previews nothing, and
   again every 10 s), and `preview("")` when it lifts: the plugin shows that
@@ -91,6 +92,7 @@ Source layout:
 | `src/core/` | `controller.*` (finds the window, combines settings, schedule and light sensor into the filter, fades, picks the output); `settings.*` (dconf keys via mlite `MDConfItem`; environment variables in host builds); `statusservice.*` (D-Bus status for the settings page and support); `crashguard.*` (the unhealthy-start counter); `logging.*` |
 | `src/colour/` | `colortemperature.*` (kelvin → per-channel gain); `colormatrix.*` (saturation, the gain in linear light); `correction.*` (protan, deutan, tritan, greyscale) |
 | `src/schedule/` | `schedule.*` (the daily window and its transitions); `sun.*` (NOAA's solar equations); `timezonelocation.*` (the time zone's city from tzdata) |
+| `src/exceptions/` | `frontapp.*` (the window in front, from lipstick's compositor; whether its app is an exception); `appmatcher.*` (the names a launcher entry's app and a window's process are known by); `applist.*` (the launcher's apps for the settings page) |
 | `src/sensor/` | `ambientcutoff.*` (bright-light hysteresis and debounce); `alscalibration.*` (mce's `AlsValueMultiplier`) |
 | `src/output/` | `filteroutput.*`: the interface every output implements |
 | `src/output/gpu/` | `gpuoutput.*` (the output); `colorfilteritem.*`, `colorfiltermaterial.*` (the scene graph item and its material: multiply blend, or framebuffer fetch with the matrix) |
@@ -98,7 +100,7 @@ Source layout:
 | `src/output/qualcomm/` | `qualcommoutput.*` (the output); `qualcommclient.*` (the client of the Qualcomm helper on the system bus) |
 | `qualcomm-helper/` | `qualcomm-helper`, the system service that sets Qualcomm's display colour matrix (`helper.*`, `qdcm.*`, `main.cpp`, `system/`); packaged as `owlfish-qualcomm` |
 | `config/` | `update-env`: run by the RPM's `%post` |
-| `settings/` | the settings page (QML; `RangeSlider.qml`: the two-handle slider for the day and night values) |
+| `settings/` | the settings page (QML; `RangeSlider.qml`: the two-handle slider for the day and night values; `ExceptionsPage.qml`, `AddAppsDialog.qml`, `AppRow.qml`: the Exceptions) |
 | `tests/` | host tests (QtTest) |
 
 A new kind of display hardware is a new folder under `src/output/` with a
@@ -351,6 +353,38 @@ devices report raw values instead of lux; mce corrects them with
 the same factor (logged at startup, and published as
 `/apps/owlfish/als_multiplier` for the Settings page).
 
+### Exceptions
+
+`src/exceptions/`. The user picks launcher entries; while one of their apps
+is in front the controller works as if switched off (a preview still
+shows). `FrontApp` follows lipstick's `LipstickCompositor` through its meta
+object (lipstick has no headers for plugins): the `topmostWindowId`
+property and its `topmostWindowIdChanged()` signal, `windowForId()`, and
+on the window `isInProcess`, `processId` and `surface.className`. Home is
+id 0; lipstick's own windows are skipped.
+
+`AppMatcher` turns both sides into names and compares them:
+
+- **Launcher entry:** for an Android app (`X-apkd-packageName`) only the
+  package; otherwise the program its `Exec` runs (past `invoker`,
+  `sailjail` and their options; for `sailfish-qml` or `python3` the
+  script) and the entry's own name.
+- **Window:** the surface's class name, which lipstick sets to the package
+  for Android windows (Jolla's `Switcher.qml` matches them the same way;
+  every Android window comes from the one `apkd-bridge` process) and to the
+  app id for xdg-shell clients; from `/proc/<pid>`: `exe`, unless it is a
+  `booster-*` (boosted apps), `argv[0]` and `comm` (cut to 15 characters,
+  so a 15-character name also matches a longer key that starts with it).
+
+Sailjail doesn't get in the way: the window's pid is the app inside the
+sandbox. Each change of the window in front is logged ("Front app").
+
+The settings page gets the launcher's apps from the plugin (`apps()` on
+D-Bus, `AppList`: localised names through mlite's `MDesktopEntry`, as
+lipstick's launcher; cached until an applications directory or the locale
+changes). A `LauncherModel` in the settings app would rewrite the home
+screen's icon order (`savePositions()` after every file update).
+
 ## Settings (dconf)
 
 ```sh
@@ -375,6 +409,8 @@ dconf write /apps/owlfish/schedule_transition 30 # minutes, 0-120, default 60
 dconf write /apps/owlfish/location_manual true   # sun at the coordinates below, default false
 dconf write /apps/owlfish/latitude 60.17         # degrees, north positive
 dconf write /apps/owlfish/longitude 24.94        # degrees, east positive
+dconf write /apps/owlfish/exceptions "['jolla-camera.desktop']"
+                                                 # launcher entries; Owlfish fades out while one is in front
 dconf write /apps/owlfish/renderer "'blend'"    # auto (default), blend, fetch (GPU), pq or qualcomm (display hardware); not on the settings page
 dconf read /apps/owlfish/sun_state               # written by the plugin, e.g. 'normal'
 dconf reset -f /apps/owlfish/                    # back to defaults, as the page's Reset does; then

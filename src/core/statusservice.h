@@ -7,6 +7,9 @@
 #include <QDBusConnection>
 #include <QDBusContext>
 #include <QObject>
+#include <QStringList>
+
+#include "applist.h"
 
 class QDBusServiceWatcher;
 
@@ -47,11 +50,15 @@ public slots:
     // which keeps it from timing out. It also ends when the caller leaves
     // the bus.
     bool preview(const QString &part);
+    // The launcher's apps for the Exceptions, four strings each
+    // (AppList::apps())
+    QStringList apps();
 
 private:
     OwlfishController *m_controller;
     // The caller of the preview on, if over D-Bus
     QDBusServiceWatcher *m_previewWatcher;
+    AppList m_apps;
 };
 
 #endif

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-2.1-only
 
 #include "statusservice.h"
+#include "appmatcher.h"
 #include "controller.h"
 #include "logging.h"
 #include <owlfish_version.h>
@@ -17,6 +18,7 @@ OwlfishStatusService::OwlfishStatusService(OwlfishController *controller)
     : QObject(controller)
     , m_controller(controller)
     , m_previewWatcher(new QDBusServiceWatcher(this))
+    , m_apps(AppMatcher::defaultDesktopDirs())
 {
     m_previewWatcher->setWatchMode(QDBusServiceWatcher::WatchForUnregistration);
     connect(m_previewWatcher, &QDBusServiceWatcher::serviceUnregistered, this, [this](const QString &service) {
@@ -83,4 +85,9 @@ bool OwlfishStatusService::preview(const QString &part)
     if (watched != m_previewWatcher->watchedServices())
         m_previewWatcher->setWatchedServices(watched);
     return on;
+}
+
+QStringList OwlfishStatusService::apps()
+{
+    return m_apps.apps();
 }

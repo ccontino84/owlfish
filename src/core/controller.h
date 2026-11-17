@@ -5,6 +5,7 @@
 #define OWLFISH_CONTROLLER_H
 
 #include "crashguard.h"
+#include "frontapp.h"
 #include "gpuoutput.h"
 #include "schedule.h"
 #include "sun.h"
@@ -71,6 +72,12 @@ public:
     // The GPU's item; it always has the filter, also while hidden
     ColorFilterItem *filterItem() const { return m_gpu ? m_gpu->item() : nullptr; }
     AmbientCutoff *cutoff() const { return m_cutoff; }
+    // Whether an exception's app is in front; null before the window is
+    // found
+    FrontApp *frontApp() const { return m_frontApp; }
+    // An exception's app is in front: the filter is faded out, as if
+    // switched off (a preview still shows)
+    bool isPaused() const { return m_frontApp && m_frontApp->isException(); }
     OwlfishSettings *settings() const { return m_settings; }
 
     // What a preview shows (setPreview())
@@ -165,6 +172,8 @@ private:
     QTimer m_previewTimer;
     bool m_displayOn;
     QPointer<QQuickWindow> m_window;
+    // From the window on; a child
+    FrontApp *m_frontApp;
     QVariantAnimation m_animation;
     // The filter: the gain, encoded as the colour temperature and the
     // dimming give it

@@ -15,6 +15,8 @@ warmer and can make it darker than its lowest brightness, like Android's
   between fixed times or with Night light, optionally only in the dark: the
   light sensor turns it off in bright light, for example outdoors, and back
   on when it gets darker.
+- **Exceptions**: apps in front of which Owlfish fades out, for example the
+  camera, to judge colours, or an app that shows a QR code to a scanner.
 - One switch, in Settings and as a top menu shortcut.
 - In English, German, Spanish, French and Italian. A wrong or clumsy
   translation is worth a bug report.
@@ -124,6 +126,12 @@ wrong](#if-something-goes-wrong)).
     see that colour at all. Greyscale removes all colour. The correction
     applies all the time, before Night light's saturation and warmth; for
     the correction alone, set Warmth to 6500 K. Same devices as Saturation.
+- **Exceptions**
+  - **Apps**: while one of these apps is in front, Owlfish fades out
+    completely (warmth, saturation, correction and dimming) and fades back
+    in when you leave it. Add apps from the pull-down menu, remove one with
+    a long press. Android apps are recognised one by one. The Enabled switch
+    doesn't change.
 
 The light sensor only affects the dimming: with a schedule, the dimming
 applies when both the time and the light say so.
@@ -218,7 +226,8 @@ file that tells lipstick to load it.
 - **Only in the home screen:** the plugin does nothing in any other process.
 - **No cost when off:** with no tint and no dimming the filter is removed.
 - **Privacy:** the light sensor is only read while "only in the dark" is in
-  use, and by the settings page while it is open. Sunset and sunrise come
+  use, and by the settings page while it is open. For the exceptions,
+  Owlfish only looks at which app is in front; it doesn't record it. Sunset and sunrise come
   from the time zone or the coordinates you type, never from location
   services. Nothing leaves the phone.
 

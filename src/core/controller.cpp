@@ -82,6 +82,7 @@ OwlfishController::OwlfishController(const QByteArray &windowClass,
     , m_findAttempts(0)
     , m_preview(NoPreview)
     , m_displayOn(true)
+    , m_frontApp(nullptr)
     , m_gain(1, 1, 1)
     , m_hwReleasePath(QLatin1String(DeviceInfo::HwReleasePath))
     , m_output(nullptr)
@@ -271,6 +272,14 @@ QString OwlfishController::diagnostics() const
                     .arg(QTime(0, 0).addSecs(m_settings->dimFrom() * 60).toString(QStringLiteral("HH:mm")),
                          QTime(0, 0).addSecs(m_settings->dimTo() * 60).toString(QStringLiteral("HH:mm")))
                   : QStringLiteral("dimming when %1").arg(when));
+        if (m_frontApp) {
+            QString exceptions = QStringLiteral("exceptions %1").arg(m_frontApp->exceptionCount());
+            if (m_settings->exceptions().size() != m_frontApp->exceptionCount())
+                exceptions += QStringLiteral(" of %1").arg(m_settings->exceptions().size());
+            if (isPaused())
+                exceptions += QStringLiteral(", paused");
+            lines << exceptions;
+        }
         if (m_preview != NoPreview)
             lines << QStringLiteral("preview %1").arg(m_preview == PreviewDay ? QStringLiteral("day")
                                                       : m_preview == PreviewNight ? QStringLiteral("night")
@@ -327,6 +336,10 @@ void OwlfishController::attach(QQuickWindow *window)
     connectOutput(m_gpu.data());
 
     qCInfo(lcOwlfish) << "Filter attached to" << window->metaObject()->className();
+
+    // The compositor knows the window in front
+    m_frontApp = new FrontApp(window, this);
+    connect(m_frontApp, &FrontApp::exceptionChanged, this, [this]() { updateGain(SettingsFadeMs); });
 
     refreshPublished();
 
@@ -385,7 +398,10 @@ void OwlfishController::applySettings()
                         << "day" << m_settings->daySaturation() << "%"
                         << "dim when" << qPrintable(m_settings->dimWhen()) << m_settings->dimFrom() << m_settings->dimTo()
                         << "renderer" << qPrintable(renderer())
-                        << "correction" << qPrintable(m_settings->correction()) << m_settings->correctionStrength() << "%";
+                        << "correction" << qPrintable(m_settings->correction()) << m_settings->correctionStrength() << "%"
+                        << "exceptions" << m_settings->exceptions().size();
+
+    m_frontApp->setExceptions(m_settings->exceptions());
 
     m_cutoff->setThreshold(m_settings->cutoffLux());
     updateLightSensor();
@@ -565,7 +581,8 @@ void OwlfishController::updateGain(int fadeMs)
     if (!m_gpu)
         return;
 
-    const bool enabled = m_settings->enabled();
+    // Paused works like switched off
+    const bool enabled = m_settings->enabled() && !isPaused();
     if (!enabled && m_preview == NoPreview) {
         fadeTo(QVector3D(1, 1, 1), QMatrix3x3(), fadeMs);
         return;

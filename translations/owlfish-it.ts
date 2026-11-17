@@ -358,5 +358,68 @@
         <source>Copied</source>
         <translation>Copiato</translation>
     </message>
+    <message id="owlfish-he-exceptions">
+        <source>Exceptions</source>
+        <extracomment>Apps in front of which Owlfish pauses</extracomment>
+        <translation>Eccezioni</translation>
+    </message>
+    <message id="owlfish-la-exception_apps">
+        <source>Apps</source>
+        <extracomment>The apps in front of which Owlfish pauses; the value lists them</extracomment>
+        <translation>App</translation>
+    </message>
+    <message id="owlfish-la-no_apps">
+        <source>None</source>
+        <extracomment>No apps chosen as exceptions</extracomment>
+        <translation>Nessuna</translation>
+    </message>
+    <message id="owlfish-la-exception_apps_description">
+        <source>Owlfish fades out while one of them is in front.</source>
+        <translation>Owlfish si dissolve finché una di queste è in primo piano.</translation>
+    </message>
+    <message id="owlfish-me-add_apps">
+        <source>Add apps</source>
+        <translation>Aggiungi app</translation>
+    </message>
+    <message id="owlfish-la-exceptions_description">
+        <source>Owlfish fades out while one of these apps is in front, and back in when you leave it.</source>
+        <translation>Owlfish si dissolve finché una di queste app è in primo piano, e ritorna quando la lasci.</translation>
+    </message>
+    <message id="owlfish-me-remove">
+        <source>Remove</source>
+        <translation>Rimuovi</translation>
+    </message>
+    <message id="owlfish-la-no_exceptions">
+        <source>No apps</source>
+        <translation>Nessuna app</translation>
+    </message>
+    <message id="owlfish-la-pull_to_add">
+        <source>Pull down to add apps</source>
+        <translation>Trascina in basso per aggiungere app</translation>
+    </message>
+    <message id="owlfish-la-android">
+        <source>Android</source>
+        <extracomment>Under the name of an app from Android App Support</extracomment>
+        <translation>Android</translation>
+    </message>
+    <message id="owlfish-bt-add">
+        <source>Add</source>
+        <extracomment>Adds the picked apps to the exceptions</extracomment>
+        <translation>Aggiungi</translation>
+    </message>
+    <message id="owlfish-ph-search">
+        <source>Search</source>
+        <translation>Cerca</translation>
+    </message>
+    <message id="owlfish-la-no_apps_to_add">
+        <source>No apps to add</source>
+        <extracomment>All apps are exceptions already, or the list could not be read</extracomment>
+        <translation>Nessuna app da aggiungere</translation>
+    </message>
+    <message id="owlfish-la-removing">
+        <source>Removing</source>
+        <extracomment>Countdown before an app leaves the exceptions</extracomment>
+        <translation>Rimozione</translation>
+    </message>
 </context>
 </TS>

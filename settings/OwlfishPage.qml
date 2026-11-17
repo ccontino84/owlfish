@@ -163,6 +163,41 @@ Page {
     // is no longer needed
     property bool sensorReported: false
 
+    // Exceptions: launcher entry file names; while one of their apps is in
+    // front the plugin fades the filter out (FrontApp)
+    ConfigurationValue {
+        id: exceptionsConfig
+
+        key: "/apps/owlfish/exceptions"
+        defaultValue: []
+    }
+
+    // The launcher's apps, from the plugin (AppList), as { id, name, icon,
+    // android }; empty while the plugin doesn't reply
+    property var launcherApps: []
+
+    function loadApps() {
+        plugin.typedCall("apps", [], function(flat) {
+            var apps = []
+            for (var i = 0; i + 3 < flat.length; i += 4)
+                apps.push({ id: flat[i], name: flat[i + 1], icon: flat[i + 2], android: flat[i + 3] === "android" })
+            page.launcherApps = apps
+        })
+    }
+
+    // The exceptions' names, as the launcher sorts them
+    readonly property string exceptionNames: {
+        var ids = exceptionsConfig.value
+        var names = []
+        for (var i = 0; i < launcherApps.length; i++) {
+            for (var j = 0; ids && j < ids.length; j++) {
+                if (String(ids[j]) === launcherApps[i].id)
+                    names.push(launcherApps[i].name)
+            }
+        }
+        return names.join(", ")
+    }
+
     // Whether the plugin runs in the home screen, checked once when the page
     // opens: OwlfishController::status() ("active", "starting", "no-window",
     // "crash-guard"), or without a reply "not-running" or "unsupported"; empty
@@ -280,6 +315,7 @@ Page {
                                               function(version) { page.pluginVersion = version })
                              plugin.typedCall("renderer", [],
                                               function(renderer) { page.pluginRenderer = renderer })
+                             page.loadApps()
                          },
                          function() { page.checkEnvironmentFile() })
     }
@@ -1203,6 +1239,24 @@ Page {
                     if (strength !== config.correction_strength)
                         config.correction_strength = strength
                 }
+            }
+
+            SectionHeader {
+                //: Apps in front of which Owlfish pauses
+                //% "Exceptions"
+                text: qsTrId("owlfish-he-exceptions")
+            }
+
+            ValueButton {
+                //: The apps in front of which Owlfish pauses; the value lists them
+                //% "Apps"
+                label: qsTrId("owlfish-la-exception_apps")
+                //: No apps chosen as exceptions
+                //% "None"
+                value: page.exceptionNames !== "" ? page.exceptionNames : qsTrId("owlfish-la-no_apps")
+                //% "Owlfish fades out while one of them is in front."
+                description: qsTrId("owlfish-la-exception_apps_description")
+                onClicked: pageStack.push(Qt.resolvedUrl("ExceptionsPage.qml"), { owlfishPage: page })
             }
         }
     }

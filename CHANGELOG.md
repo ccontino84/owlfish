@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.8.0 (unreleased)
+- Exceptions: choose apps in front of which Owlfish fades out, for example the camera, to judge colours and white balance, or an app that shows a QR code to a scanner. Owlfish comes back when you leave the app. Android apps are recognised one by one. Settings: Exceptions > Apps, at the end of the page.
+
 ## 1.7.0 (2026-11-04)
 - Night light with a schedule now has a day value and a night value for Warmth and Saturation: each slider gets two handles, the day's (sun) on the left and the night's (moon) on the right, and the colour changes gradually between them. For example, a slight warmth all day and a strong one at night. The day values start at no change, so nothing changes until you move them.
 - Saturation now runs from 100 % on the left to grey on the right, like Warmth: on both sliders, further right means more filter.
