@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.8.0 (unreleased)
+## 1.8.0 (2026-11-17)
 - Exceptions: choose apps in front of which Owlfish fades out, for example the camera, to judge colours and white balance, or an app that shows a QR code to a scanner. Owlfish comes back when you leave the app. Android apps are recognised one by one. Settings: Exceptions > Apps, at the end of the page.
 
 ## 1.7.0 (2026-11-04)
